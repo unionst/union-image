@@ -242,6 +242,20 @@ private struct ImageViewerOverlay: View {
                 .padding(.vertical, 8)
             }
         }
+        .safeAreaBar(edge: .bottom) {
+            if viewModel.showControls {
+                HStack {
+                    Spacer()
+                    ShareLink(item: Image(uiImage: viewModel.image), preview: SharePreview("Image", image: Image(uiImage: viewModel.image))) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .glassEffect()
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+        }
         .preferredColorScheme(.dark)
     }
 }
