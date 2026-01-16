@@ -98,6 +98,7 @@ private class ImageViewerViewController: UIViewController {
         switch gesture.state {
         case .changed:
             viewModel.dragOffset = translation.y
+            viewModel.dragOffsetX = translation.x
         case .ended, .cancelled:
             let velocity = gesture.velocity(in: view).y
             let shouldDismiss = translation.y > 100 || velocity > 300
@@ -109,6 +110,7 @@ private class ImageViewerViewController: UIViewController {
             } else {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                     viewModel.dragOffset = 0
+                    viewModel.dragOffsetX = 0
                 }
             }
         default:
@@ -137,11 +139,17 @@ private final class ImageViewerViewModel {
     var backgroundOpacity: Double = 0
     var showControls = false
     var dragOffset: CGFloat = 0
+    var dragOffsetX: CGFloat = 0
 
     var isExpanded = false
 
     var dragProgress: CGFloat {
         min(max(dragOffset, 0) / 300, 1)
+    }
+
+    var dampedDragOffsetX: CGFloat {
+        let maxResistance: CGFloat = 100
+        return dragOffsetX / (1 + abs(dragOffsetX) / maxResistance)
     }
 
     var screenBounds: CGRect {
@@ -186,6 +194,7 @@ private final class ImageViewerViewModel {
             currentFrame = sourceFrame
             backgroundOpacity = 0
             dragOffset = 0
+            dragOffsetX = 0
             showControls = false
             isExpanded = false
         }
@@ -214,7 +223,7 @@ private struct ImageViewerOverlay: View {
                     .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
                     .scaleEffect(1 - viewModel.dragProgress * 0.1)
                     .position(
-                        x: viewModel.currentFrame.midX,
+                        x: viewModel.currentFrame.midX + viewModel.dampedDragOffsetX,
                         y: viewModel.currentFrame.midY + (viewModel.dragOffset > 0 ? viewModel.dragOffset : 0)
                     )
             }
