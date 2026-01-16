@@ -227,15 +227,18 @@ private struct ImageViewerOverlay: View {
                 )
         }
         .ignoresSafeArea()
-        .overlay(alignment: .topTrailing) {
+        .safeAreaBar(edge: .top) {
             if viewModel.showControls {
-                Button(role: .close) {
-                    if let onClose {
-                        viewModel.collapse(completion: onClose)
+                HStack {
+                    Spacer()
+                    Button(role: .close) {
+                        if let onClose {
+                            viewModel.collapse(completion: onClose)
+                        }
                     }
                 }
-                .padding(.trailing, 16)
-                .padding(.top, 60)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
         }
         .preferredColorScheme(.dark)
