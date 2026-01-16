@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import LinkPresentation
 
 // MARK: - ImageViewerController
 
@@ -126,7 +127,8 @@ private class ImageViewerViewController: UIViewController {
     private func setupToolbar() {
         let shareButton = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
-            let activityVC = UIActivityViewController(activityItems: [viewModel.image], applicationActivities: nil)
+            let itemSource = ImageActivityItemSource(image: viewModel.image)
+            let activityVC = UIActivityViewController(activityItems: [itemSource], applicationActivities: nil)
             activityVC.popoverPresentationController?.barButtonItem = self.toolbarItems?.last
             present(activityVC, animated: true)
         })
@@ -169,6 +171,32 @@ private class ImageViewerViewController: UIViewController {
             self.navigationController?.setToolbarHidden(!self.viewModel.showControls, animated: true)
             self.setNeedsStatusBarAppearanceUpdate()
         }
+    }
+}
+
+// MARK: - ImageActivityItemSource
+
+private final class ImageActivityItemSource: NSObject, UIActivityItemSource {
+    private let image: UIImage
+
+    init(image: UIImage) {
+        self.image = image
+        super.init()
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        image
+    }
+
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        image
+    }
+
+    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        metadata.title = "Image"
+        metadata.imageProvider = NSItemProvider(object: image)
+        return metadata
     }
 }
 
