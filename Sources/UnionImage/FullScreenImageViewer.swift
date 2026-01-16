@@ -50,11 +50,8 @@ public final class ImageViewerController {
         }
     }
 
-    public func clearActiveImage() {
-        activeImage = nil
-    }
-
     private func dismiss() {
+        activeImage = nil
         overlayWindow?.isHidden = true
         overlayWindow = nil
         viewerViewController = nil
@@ -231,7 +228,6 @@ private final class ImageViewerViewModel {
     }
 
     func collapse(completion: @escaping @MainActor () -> Void) {
-        ImageViewerController.shared.clearActiveImage()
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             currentFrame = sourceFrame
             backgroundOpacity = 0
