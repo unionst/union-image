@@ -49,6 +49,14 @@ private class ImageViewerViewController: UIViewController {
     private let onDismiss: @MainActor () -> Void
     private var hostingController: UIHostingController<ImageViewerOverlay>?
 
+    override var prefersStatusBarHidden: Bool {
+        !viewModel.showControls
+    }
+
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
+        .fade
+    }
+
     init(viewModel: ImageViewerViewModel, onDismiss: @escaping @MainActor () -> Void) {
         self.viewModel = viewModel
         self.onDismiss = onDismiss
@@ -108,6 +116,9 @@ private class ImageViewerViewController: UIViewController {
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         withAnimation(.easeInOut(duration: 0.2)) {
             viewModel.showControls.toggle()
+        }
+        UIView.animate(withDuration: 0.2) {
+            self.setNeedsStatusBarAppearanceUpdate()
         }
     }
 }
@@ -217,7 +228,6 @@ private struct ImageViewerOverlay: View {
             }
             .toolbarBackground(.hidden, for: .navigationBar)
         }
-        .statusBarHidden(!viewModel.showControls)
         .preferredColorScheme(.dark)
     }
 }
