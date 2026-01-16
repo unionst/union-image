@@ -26,11 +26,20 @@ public final class ImageViewerController {
             self?.dismiss()
         }
 
+        let navController = UINavigationController(rootViewController: viewerVC)
+        navController.view.backgroundColor = .clear
+
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        navController.navigationBar.standardAppearance = appearance
+        navController.navigationBar.scrollEdgeAppearance = appearance
+        navController.navigationBar.compactAppearance = appearance
+
         let window = UIWindow(windowScene: windowScene)
         window.windowLevel = .alert + 100
         window.backgroundColor = .clear
         window.overrideUserInterfaceStyle = .dark
-        window.rootViewController = viewerVC
+        window.rootViewController = navController
         window.isHidden = false
 
         self.overlayWindow = window
@@ -78,7 +87,7 @@ private class ImageViewerViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
 
-        let overlay = ImageViewerOverlay(viewModel: viewModel, onClose: onDismiss)
+        let overlay = ImageViewerOverlay(viewModel: viewModel)
         let hosting = UIHostingController(rootView: overlay)
         hosting.view.backgroundColor = .clear
 
@@ -90,11 +99,35 @@ private class ImageViewerViewController: UIViewController {
 
         self.hostingController = hosting
 
+        setupNavigationBar()
+        setupToolbar()
+
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         view.addGestureRecognizer(panGesture)
 
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
+    }
+
+    private func setupNavigationBar() {
+        let closeButton = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            viewModel.collapse(completion: onDismiss)
+        })
+        navigationItem.rightBarButtonItem = closeButton
+        navigationController?.setNavigationBarHidden(!viewModel.showControls, animated: false)
+    }
+
+    private func setupToolbar() {
+        let shareButton = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            let activityVC = UIActivityViewController(activityItems: [viewModel.image], applicationActivities: nil)
+            present(activityVC, animated: true)
+        })
+        let spacer = UIBarButtonItem(systemItem: .flexibleSpace)
+        toolbarItems = [spacer, shareButton, spacer]
+        navigationController?.setToolbarHidden(!viewModel.showControls, animated: false)
+        navigationController?.toolbar.backgroundColor = .clear
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -124,10 +157,10 @@ private class ImageViewerViewController: UIViewController {
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            viewModel.showControls.toggle()
-        }
+        viewModel.showControls.toggle()
         UIView.animate(withDuration: 0.2) {
+            self.navigationController?.setNavigationBarHidden(!self.viewModel.showControls, animated: true)
+            self.navigationController?.setToolbarHidden(!self.viewModel.showControls, animated: true)
             self.setNeedsStatusBarAppearanceUpdate()
         }
     }
@@ -214,7 +247,6 @@ private final class ImageViewerViewModel {
 
 private struct ImageViewerOverlay: View {
     @Bindable var viewModel: ImageViewerViewModel
-    var onClose: (@MainActor () -> Void)?
 
     var body: some View {
         ZStack {
@@ -232,36 +264,6 @@ private struct ImageViewerOverlay: View {
                 )
         }
         .ignoresSafeArea()
-        .safeAreaBar(edge: .top) {
-            if viewModel.showControls {
-                HStack {
-                    Spacer()
-                    Button(role: .close) {
-                        if let onClose {
-                            viewModel.collapse(completion: onClose)
-                        }
-                    }
-                    .glassEffect()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-            }
-        }
-        .safeAreaBar(edge: .bottom) {
-            if viewModel.showControls {
-                HStack {
-                    Spacer()
-                    ShareLink(item: Image(uiImage: viewModel.image), preview: SharePreview("Image", image: Image(uiImage: viewModel.image))) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                    }
-                    .glassEffect()
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-            }
-        }
-        .preferredColorScheme(.dark)
     }
 }
 
