@@ -25,6 +25,7 @@ public final class ImageViewerController {
         let window = UIWindow(windowScene: windowScene)
         window.windowLevel = .alert + 100
         window.backgroundColor = .clear
+        window.overrideUserInterfaceStyle = .dark
         window.rootViewController = viewerVC
         window.isHidden = false
 
