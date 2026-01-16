@@ -7,8 +7,8 @@ import UIKit
 public final class ImageViewerController {
     public static let shared = ImageViewerController()
 
-    private var overlayWindow: PassThroughWindow?
-    private var hostingController: UIHostingController<ImageViewerOverlay>?
+    private var overlayWindow: UIWindow?
+    private var viewerViewController: ImageViewerViewController?
 
     private init() {}
 
@@ -18,22 +18,17 @@ public final class ImageViewerController {
             .first else { return }
 
         let viewModel = ImageViewerViewModel(image: image, sourceFrame: sourceFrame)
-
-        let overlay = ImageViewerOverlay(viewModel: viewModel) { @MainActor [weak self] in
+        let viewerVC = ImageViewerViewController(viewModel: viewModel) { [weak self] in
             self?.dismiss()
         }
 
-        let hosting = UIHostingController(rootView: overlay)
-        hosting.view.backgroundColor = .clear
-
-        let window = PassThroughWindow(windowScene: windowScene)
+        let window = UIWindow(windowScene: windowScene)
         window.windowLevel = .alert + 100
-        window.rootViewController = hosting
+        window.rootViewController = viewerVC
         window.isHidden = false
-        window.isUserInteractionEnabled = true
 
         self.overlayWindow = window
-        self.hostingController = hosting
+        self.viewerViewController = viewerVC
 
         Task { @MainActor in
             viewModel.expand()
@@ -43,30 +38,77 @@ public final class ImageViewerController {
     private func dismiss() {
         overlayWindow?.isHidden = true
         overlayWindow = nil
-        hostingController = nil
+        viewerViewController = nil
     }
 }
 
-// MARK: - PassThroughWindow
+// MARK: - ImageViewerViewController
 
-private class PassThroughWindow: UIWindow {
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let hitView = super.hitTest(point, with: event),
-              let rootView = rootViewController?.view else {
-            return nil
-        }
+private class ImageViewerViewController: UIViewController {
+    private let viewModel: ImageViewerViewModel
+    private let onDismiss: @MainActor () -> Void
+    private var hostingController: UIHostingController<ImageViewerOverlay>?
 
-        if hitView !== rootView {
-            return hitView
-        }
+    init(viewModel: ImageViewerViewModel, onDismiss: @escaping @MainActor () -> Void) {
+        self.viewModel = viewModel
+        self.onDismiss = onDismiss
+        super.init(nibName: nil, bundle: nil)
+    }
 
-        for subview in rootView.subviews.reversed() {
-            let pointInSubview = subview.convert(point, from: rootView)
-            if subview.hitTest(pointInSubview, with: event) != nil {
-                return hitView
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        let overlay = ImageViewerOverlay(viewModel: viewModel, onClose: onDismiss)
+        let hosting = UIHostingController(rootView: overlay)
+        hosting.view.backgroundColor = .clear
+
+        addChild(hosting)
+        view.addSubview(hosting.view)
+        hosting.view.frame = view.bounds
+        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hosting.didMove(toParent: self)
+
+        self.hostingController = hosting
+
+        let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        view.addGestureRecognizer(panGesture)
+
+        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        view.addGestureRecognizer(tapGesture)
+    }
+
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: view)
+
+        switch gesture.state {
+        case .changed:
+            viewModel.dragOffset = translation.y
+        case .ended, .cancelled:
+            let velocity = gesture.velocity(in: view).y
+            let shouldDismiss = translation.y > 100 || velocity > 300
+
+            if shouldDismiss {
+                viewModel.collapse { [onDismiss] in
+                    onDismiss()
+                }
+            } else {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    viewModel.dragOffset = 0
+                }
             }
+        default:
+            break
         }
-        return nil
+    }
+
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            viewModel.showControls.toggle()
+        }
     }
 }
 
@@ -144,62 +186,39 @@ private final class ImageViewerViewModel {
 
 private struct ImageViewerOverlay: View {
     @Bindable var viewModel: ImageViewerViewModel
-    let onDismiss: @MainActor () -> Void
+    var onClose: (@MainActor () -> Void)?
 
     var body: some View {
-        ZStack {
-            Color.black
-                .opacity(viewModel.backgroundOpacity * (1 - viewModel.dragProgress))
-                .ignoresSafeArea()
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        viewModel.showControls.toggle()
+        NavigationStack {
+            ZStack {
+                Color.black
+                    .opacity(viewModel.backgroundOpacity * (1 - viewModel.dragProgress))
+                    .ignoresSafeArea()
+
+                Image(uiImage: viewModel.image)
+                    .resizable()
+                    .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
+                    .scaleEffect(1 - viewModel.dragProgress * 0.1)
+                    .position(
+                        x: viewModel.currentFrame.midX,
+                        y: viewModel.currentFrame.midY + (viewModel.dragOffset > 0 ? viewModel.dragOffset : 0)
+                    )
+            }
+            .ignoresSafeArea()
+            .toolbar(viewModel.showControls ? .visible : .hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) {
+                        if let onClose {
+                            viewModel.collapse(completion: onClose)
+                        }
                     }
                 }
-
-            Image(uiImage: viewModel.image)
-                .resizable()
-                .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
-                .scaleEffect(1 - viewModel.dragProgress * 0.1)
-                .position(
-                    x: viewModel.currentFrame.midX,
-                    y: viewModel.currentFrame.midY + (viewModel.dragOffset > 0 ? viewModel.dragOffset : 0)
-                )
-                .gesture(dismissGesture)
-        }
-        .overlay(alignment: .topTrailing) {
-            if viewModel.showControls {
-                Button(role: .close) {
-                    viewModel.collapse(completion: onDismiss)
-                }
-                .padding(.trailing, 16)
-                .padding(.top, 56)
-                .transition(.opacity)
             }
+            .toolbarBackground(.hidden, for: .navigationBar)
         }
-        .ignoresSafeArea()
         .statusBarHidden(!viewModel.showControls)
         .preferredColorScheme(.dark)
-    }
-
-    private var dismissGesture: some Gesture {
-        DragGesture()
-            .onChanged { value in
-                viewModel.dragOffset = value.translation.height
-            }
-            .onEnded { value in
-                let translation = value.translation.height
-                let velocity = value.predictedEndTranslation.height - translation
-                let shouldDismiss = translation > 100 || velocity > 300
-
-                if shouldDismiss {
-                    viewModel.collapse(completion: onDismiss)
-                } else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        viewModel.dragOffset = 0
-                    }
-                }
-            }
     }
 }
 
