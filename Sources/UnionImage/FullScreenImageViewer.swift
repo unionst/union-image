@@ -15,14 +15,14 @@ public final class ImageViewerController {
 
     private init() {}
 
-    public func show(image: UIImage, sourceFrame: CGRect) {
+    public func show(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0) {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first else { return }
 
         activeImage = image
 
-        let viewModel = ImageViewerViewModel(image: image, sourceFrame: sourceFrame)
+        let viewModel = ImageViewerViewModel(image: image, sourceFrame: sourceFrame, sourceCornerRadius: sourceCornerRadius)
         let viewerVC = ImageViewerViewController(viewModel: viewModel) { [weak self] in
             self?.dismiss()
         }
@@ -206,8 +206,10 @@ private final class ImageActivityItemSource: NSObject, UIActivityItemSource {
 private final class ImageViewerViewModel {
     let image: UIImage
     let sourceFrame: CGRect
+    let sourceCornerRadius: CGFloat
 
     var currentFrame: CGRect
+    var currentCornerRadius: CGFloat
     var backgroundOpacity: Double = 0
     var showControls = false
     var dragOffset: CGFloat = 0
@@ -247,15 +249,18 @@ private final class ImageViewerViewModel {
         )
     }
 
-    init(image: UIImage, sourceFrame: CGRect) {
+    init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0) {
         self.image = image
         self.sourceFrame = sourceFrame
+        self.sourceCornerRadius = sourceCornerRadius
         self.currentFrame = sourceFrame
+        self.currentCornerRadius = sourceCornerRadius
     }
 
     func expand() {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             currentFrame = expandedFrame
+            currentCornerRadius = 0
             backgroundOpacity = 1
             isExpanded = true
         }
@@ -264,6 +269,7 @@ private final class ImageViewerViewModel {
     func collapse(completion: @escaping @MainActor () -> Void) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             currentFrame = sourceFrame
+            currentCornerRadius = sourceCornerRadius
             backgroundOpacity = 0
             dragOffset = 0
             dragOffsetX = 0
@@ -291,6 +297,7 @@ private struct ImageViewerOverlay: View {
             Image(uiImage: viewModel.image)
                 .resizable()
                 .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
+                .clipShape(RoundedRectangle(cornerRadius: viewModel.currentCornerRadius))
                 .scaleEffect(1 - viewModel.dragProgress * 0.1)
                 .position(
                     x: viewModel.currentFrame.midX + viewModel.dampedDragOffsetX,
@@ -305,13 +312,15 @@ private struct ImageViewerOverlay: View {
 
 public struct ZoomableImage: View {
     private let uiImage: UIImage
+    private let sourceCornerRadius: CGFloat
 
     private var isActive: Bool {
         ImageViewerController.shared.activeImage === uiImage
     }
 
-    public init(uiImage: UIImage) {
+    public init(uiImage: UIImage, sourceCornerRadius: CGFloat = 0) {
         self.uiImage = uiImage
+        self.sourceCornerRadius = sourceCornerRadius
     }
 
     public var body: some View {
@@ -324,7 +333,7 @@ public struct ZoomableImage: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     let frame = geo.frame(in: .global)
-                    ImageViewerController.shared.show(image: uiImage, sourceFrame: frame)
+                    ImageViewerController.shared.show(image: uiImage, sourceFrame: frame, sourceCornerRadius: sourceCornerRadius)
                 }
         }
         .aspectRatio(uiImage.size, contentMode: .fit)
