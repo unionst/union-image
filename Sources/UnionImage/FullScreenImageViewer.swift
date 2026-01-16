@@ -24,6 +24,7 @@ public final class ImageViewerController {
 
         let window = UIWindow(windowScene: windowScene)
         window.windowLevel = .alert + 100
+        window.backgroundColor = .clear
         window.rootViewController = viewerVC
         window.isHidden = false
 
@@ -69,6 +70,7 @@ private class ImageViewerViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
 
         let overlay = ImageViewerOverlay(viewModel: viewModel, onClose: onDismiss)
         let hosting = UIHostingController(rootView: overlay)
