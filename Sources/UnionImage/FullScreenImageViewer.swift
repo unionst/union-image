@@ -52,9 +52,11 @@ public final class ImageViewerController {
 
     private func dismiss() {
         activeImage = nil
-        overlayWindow?.isHidden = true
-        overlayWindow = nil
-        viewerViewController = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.overlayWindow?.isHidden = true
+            self?.overlayWindow = nil
+            self?.viewerViewController = nil
+        }
     }
 }
 
