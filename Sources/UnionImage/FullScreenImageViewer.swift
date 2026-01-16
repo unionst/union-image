@@ -3,12 +3,14 @@ import UIKit
 
 // MARK: - ImageViewerController
 
-@MainActor
+@MainActor @Observable
 public final class ImageViewerController {
     public static let shared = ImageViewerController()
 
     private var overlayWindow: UIWindow?
     private var viewerViewController: ImageViewerViewController?
+
+    public private(set) var activeImage: UIImage?
 
     private init() {}
 
@@ -16,6 +18,8 @@ public final class ImageViewerController {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first else { return }
+
+        activeImage = image
 
         let viewModel = ImageViewerViewModel(image: image, sourceFrame: sourceFrame)
         let viewerVC = ImageViewerViewController(viewModel: viewModel) { [weak self] in
@@ -41,6 +45,7 @@ public final class ImageViewerController {
         overlayWindow?.isHidden = true
         overlayWindow = nil
         viewerViewController = nil
+        activeImage = nil
     }
 }
 
@@ -265,6 +270,10 @@ private struct ImageViewerOverlay: View {
 public struct ZoomableImage: View {
     private let uiImage: UIImage
 
+    private var isActive: Bool {
+        ImageViewerController.shared.activeImage === uiImage
+    }
+
     public init(uiImage: UIImage) {
         self.uiImage = uiImage
     }
@@ -272,6 +281,7 @@ public struct ZoomableImage: View {
     public var body: some View {
         GeometryReader { geo in
             Image(uiImage: uiImage)
+                .opacity(isActive ? 0 : 1)
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
