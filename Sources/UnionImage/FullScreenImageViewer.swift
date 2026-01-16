@@ -212,33 +212,31 @@ private struct ImageViewerOverlay: View {
     var onClose: (@MainActor () -> Void)?
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black
-                    .opacity(viewModel.backgroundOpacity * (1 - viewModel.dragProgress))
-                    .ignoresSafeArea()
+        ZStack {
+            Color.black
+                .opacity(viewModel.backgroundOpacity * (1 - viewModel.dragProgress))
+                .ignoresSafeArea()
 
-                Image(uiImage: viewModel.image)
-                    .resizable()
-                    .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
-                    .scaleEffect(1 - viewModel.dragProgress * 0.1)
-                    .position(
-                        x: viewModel.currentFrame.midX + viewModel.dampedDragOffsetX,
-                        y: viewModel.currentFrame.midY + (viewModel.dragOffset > 0 ? viewModel.dragOffset : 0)
-                    )
-            }
-            .ignoresSafeArea()
-            .toolbar(viewModel.showControls ? .visible : .hidden, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(role: .close) {
-                        if let onClose {
-                            viewModel.collapse(completion: onClose)
-                        }
+            Image(uiImage: viewModel.image)
+                .resizable()
+                .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
+                .scaleEffect(1 - viewModel.dragProgress * 0.1)
+                .position(
+                    x: viewModel.currentFrame.midX + viewModel.dampedDragOffsetX,
+                    y: viewModel.currentFrame.midY + (viewModel.dragOffset > 0 ? viewModel.dragOffset : 0)
+                )
+        }
+        .ignoresSafeArea()
+        .overlay(alignment: .topTrailing) {
+            if viewModel.showControls {
+                Button(role: .close) {
+                    if let onClose {
+                        viewModel.collapse(completion: onClose)
                     }
                 }
+                .padding(.trailing, 16)
+                .padding(.top, 60)
             }
-            .toolbarBackground(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
     }
