@@ -236,10 +236,10 @@ private struct ImageViewerOverlay: View {
                             viewModel.collapse(completion: onClose)
                         }
                     }
+                    .glassEffect()
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.glassEffect)
             }
         }
         .preferredColorScheme(.dark)
