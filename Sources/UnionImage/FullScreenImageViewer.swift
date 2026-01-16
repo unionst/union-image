@@ -55,7 +55,7 @@ public final class ImageViewerController {
             activeImage = nil
         }
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: .milliseconds(150))
             overlayWindow?.isHidden = true
             overlayWindow = nil
             viewerViewController = nil
