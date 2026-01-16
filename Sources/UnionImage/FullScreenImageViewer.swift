@@ -52,12 +52,9 @@ public final class ImageViewerController {
 
     private func dismiss() {
         activeImage = nil
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(50))
-            overlayWindow?.isHidden = true
-            overlayWindow = nil
-            viewerViewController = nil
-        }
+        overlayWindow?.isHidden = true
+        overlayWindow = nil
+        viewerViewController = nil
     }
 }
 
@@ -290,6 +287,7 @@ public struct ZoomableImage: View {
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(isActive ? 0 : 1)
+                .animation(isActive ? nil : .easeOut(duration: 0.15), value: isActive)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     let frame = geo.frame(in: .global)
