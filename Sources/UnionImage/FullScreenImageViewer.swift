@@ -122,10 +122,11 @@ private class ImageViewerViewController: UIViewController {
         let shareButton = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             let activityVC = UIActivityViewController(activityItems: [viewModel.image], applicationActivities: nil)
+            activityVC.popoverPresentationController?.barButtonItem = self.toolbarItems?.last
             present(activityVC, animated: true)
         })
         let spacer = UIBarButtonItem(systemItem: .flexibleSpace)
-        toolbarItems = [spacer, shareButton, spacer]
+        toolbarItems = [spacer, shareButton]
         navigationController?.setToolbarHidden(!viewModel.showControls, animated: false)
         navigationController?.toolbar.backgroundColor = .clear
     }
