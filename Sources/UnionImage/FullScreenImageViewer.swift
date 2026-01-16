@@ -283,10 +283,10 @@ public struct ZoomableImage: View {
     public var body: some View {
         GeometryReader { geo in
             Image(uiImage: uiImage)
-                .opacity(isActive ? 0 : 1)
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(isActive ? 0 : 1)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     let frame = geo.frame(in: .global)
