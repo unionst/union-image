@@ -171,7 +171,7 @@ private class ImageViewerViewController: UIViewController {
 
 // MARK: - ViewModel
 
-@Observable
+@Observable @MainActor
 private final class ImageViewerViewModel {
     let image: UIImage
     let sourceFrame: CGRect
