@@ -231,21 +231,14 @@ private final class ImageViewerViewModel {
     }
 
     var expandedFrame: CGRect {
-        let imageSize = image.size
         let screenSize = screenBounds.size
-
-        let widthRatio = screenSize.width / imageSize.width
-        let heightRatio = screenSize.height / imageSize.height
-        let scale = min(widthRatio, heightRatio)
-
-        let scaledWidth = imageSize.width * scale
-        let scaledHeight = imageSize.height * scale
+        let size = min(screenSize.width, screenSize.height)
 
         return CGRect(
-            x: (screenSize.width - scaledWidth) / 2,
-            y: (screenSize.height - scaledHeight) / 2,
-            width: scaledWidth,
-            height: scaledHeight
+            x: (screenSize.width - size) / 2,
+            y: (screenSize.height - size) / 2,
+            width: size,
+            height: size
         )
     }
 
@@ -296,6 +289,7 @@ private struct ImageViewerOverlay: View {
 
             Image(uiImage: viewModel.image)
                 .resizable()
+                .aspectRatio(contentMode: .fill)
                 .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
                 .clipShape(RoundedRectangle(cornerRadius: viewModel.currentCornerRadius))
                 .scaleEffect(1 - viewModel.dragProgress * 0.1)
