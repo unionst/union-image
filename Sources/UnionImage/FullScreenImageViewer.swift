@@ -231,15 +231,31 @@ private final class ImageViewerViewModel {
     }
 
     var expandedFrame: CGRect {
+        let imageSize = image.size
         let screenSize = screenBounds.size
-        let size = min(screenSize.width, screenSize.height)
+
+        let widthRatio = screenSize.width / imageSize.width
+        let heightRatio = screenSize.height / imageSize.height
+        let scale = min(widthRatio, heightRatio)
+
+        let scaledWidth = imageSize.width * scale
+        let scaledHeight = imageSize.height * scale
 
         return CGRect(
-            x: (screenSize.width - size) / 2,
-            y: (screenSize.height - size) / 2,
-            width: size,
-            height: size
+            x: (screenSize.width - scaledWidth) / 2,
+            y: (screenSize.height - scaledHeight) / 2,
+            width: scaledWidth,
+            height: scaledHeight
         )
+    }
+
+    var currentAspectRatio: CGFloat {
+        guard currentFrame.height > 0 else { return 1 }
+        return currentFrame.width / currentFrame.height
+    }
+
+    var shouldUseFillMode: Bool {
+        abs(currentAspectRatio - 1.0) < 0.1
     }
 
     init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0) {
@@ -289,7 +305,7 @@ private struct ImageViewerOverlay: View {
 
             Image(uiImage: viewModel.image)
                 .resizable()
-                .aspectRatio(contentMode: .fill)
+                .aspectRatio(contentMode: viewModel.shouldUseFillMode ? .fill : .fit)
                 .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
                 .clipShape(RoundedRectangle(cornerRadius: viewModel.currentCornerRadius))
                 .scaleEffect(1 - viewModel.dragProgress * 0.1)
@@ -321,7 +337,7 @@ public struct ZoomableImage: View {
         GeometryReader { geo in
             Image(uiImage: uiImage)
                 .resizable()
-                .scaledToFit()
+                .scaledToFill()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(isActive ? 0 : 1)
                 .contentShape(Rectangle())
@@ -330,6 +346,6 @@ public struct ZoomableImage: View {
                     ImageViewerController.shared.show(image: uiImage, sourceFrame: frame, sourceCornerRadius: sourceCornerRadius)
                 }
         }
-        .aspectRatio(uiImage.size, contentMode: .fit)
+        .aspectRatio(uiImage.size, contentMode: .fill)
     }
 }
