@@ -231,22 +231,35 @@ private final class ImageViewerViewModel {
     }
 
     var expandedFrame: CGRect {
-        let imageSize = image.size
         let screenSize = screenBounds.size
 
-        let widthRatio = screenSize.width / imageSize.width
-        let heightRatio = screenSize.height / imageSize.height
-        let scale = min(widthRatio, heightRatio)
+        let sourceAspect = sourceFrame.width / sourceFrame.height
+        let isSourceSquare = abs(sourceAspect - 1.0) < 0.1
 
-        let scaledWidth = imageSize.width * scale
-        let scaledHeight = imageSize.height * scale
+        if isSourceSquare {
+            let size = min(screenSize.width, screenSize.height)
+            return CGRect(
+                x: (screenSize.width - size) / 2,
+                y: (screenSize.height - size) / 2,
+                width: size,
+                height: size
+            )
+        } else {
+            let imageSize = image.size
+            let widthRatio = screenSize.width / imageSize.width
+            let heightRatio = screenSize.height / imageSize.height
+            let scale = min(widthRatio, heightRatio)
 
-        return CGRect(
-            x: (screenSize.width - scaledWidth) / 2,
-            y: (screenSize.height - scaledHeight) / 2,
-            width: scaledWidth,
-            height: scaledHeight
-        )
+            let scaledWidth = imageSize.width * scale
+            let scaledHeight = imageSize.height * scale
+
+            return CGRect(
+                x: (screenSize.width - scaledWidth) / 2,
+                y: (screenSize.height - scaledHeight) / 2,
+                width: scaledWidth,
+                height: scaledHeight
+            )
+        }
     }
 
     var currentAspectRatio: CGFloat {
@@ -255,7 +268,11 @@ private final class ImageViewerViewModel {
     }
 
     var shouldUseFillMode: Bool {
-        abs(currentAspectRatio - 1.0) < 0.1
+        let useFill = abs(currentAspectRatio - 1.0) < 0.1
+        if currentFrame != sourceFrame && currentFrame != expandedFrame {
+            print("[Zoom] Current: \(currentFrame.width)x\(currentFrame.height), aspect: \(currentAspectRatio), useFill: \(useFill)")
+        }
+        return useFill
     }
 
     init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0) {
@@ -267,6 +284,11 @@ private final class ImageViewerViewModel {
     }
 
     func expand() {
+        print("[Zoom] Source frame: \(sourceFrame.width)x\(sourceFrame.height), corner: \(sourceCornerRadius)")
+        print("[Zoom] Expanded frame: \(expandedFrame.width)x\(expandedFrame.height)")
+        print("[Zoom] Source aspect: \(sourceFrame.width / sourceFrame.height)")
+        print("[Zoom] Expanded aspect: \(expandedFrame.width / expandedFrame.height)")
+
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             currentFrame = expandedFrame
             currentCornerRadius = 0
@@ -276,6 +298,8 @@ private final class ImageViewerViewModel {
     }
 
     func collapse(completion: @escaping @MainActor () -> Void) {
+        print("[Zoom] Collapsing from \(currentFrame.width)x\(currentFrame.height) to \(sourceFrame.width)x\(sourceFrame.height)")
+
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             currentFrame = sourceFrame
             currentCornerRadius = sourceCornerRadius
@@ -338,7 +362,7 @@ public struct ZoomableImage: View {
             Image(uiImage: uiImage)
                 .resizable()
                 .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: geo.size.width, height: geo.size.height)
                 .opacity(isActive ? 0 : 1)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -346,6 +370,5 @@ public struct ZoomableImage: View {
                     ImageViewerController.shared.show(image: uiImage, sourceFrame: frame, sourceCornerRadius: sourceCornerRadius)
                 }
         }
-        .aspectRatio(uiImage.size, contentMode: .fill)
     }
 }
