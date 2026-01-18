@@ -72,7 +72,7 @@ private class ImageViewerViewController: UIViewController {
     private var hostingController: UIHostingController<ImageViewerOverlay>?
 
     override var prefersStatusBarHidden: Bool {
-        !viewModel.showControls
+        !viewModel.showControls && !viewModel.isDismissing
     }
 
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
@@ -119,6 +119,7 @@ private class ImageViewerViewController: UIViewController {
         let closeButton = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             viewModel.collapse(completion: onDismiss)
+            setNeedsStatusBarAppearanceUpdate()
         })
         navigationItem.rightBarButtonItem = closeButton
         navigationController?.setNavigationBarHidden(!viewModel.showControls, animated: false)
@@ -153,6 +154,7 @@ private class ImageViewerViewController: UIViewController {
                 viewModel.collapse { [onDismiss] in
                     onDismiss()
                 }
+                setNeedsStatusBarAppearanceUpdate()
             } else {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                     viewModel.dragOffset = 0
@@ -216,6 +218,7 @@ private final class ImageViewerViewModel {
     var dragOffsetX: CGFloat = 0
 
     var isExpanded = false
+    var isDismissing = false
 
     var dragProgress: CGFloat {
         min(max(dragOffset, 0) / 300, 1)
@@ -299,6 +302,8 @@ private final class ImageViewerViewModel {
 
     func collapse(completion: @escaping @MainActor () -> Void) {
         print("[Zoom] Collapsing from \(currentFrame.width)x\(currentFrame.height) to \(sourceFrame.width)x\(sourceFrame.height)")
+
+        isDismissing = true
 
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             currentFrame = sourceFrame
