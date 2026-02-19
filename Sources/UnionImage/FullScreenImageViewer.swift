@@ -70,6 +70,7 @@ private class ImageViewerViewController: UIViewController {
     private let viewModel: ImageViewerViewModel
     private let onDismiss: @MainActor () -> Void
     private var hostingController: UIHostingController<ImageViewerOverlay>?
+    private var saveButton: UIBarButtonItem?
 
     override var prefersStatusBarHidden: Bool {
         !viewModel.showControls && !viewModel.isDismissing
@@ -126,6 +127,11 @@ private class ImageViewerViewController: UIViewController {
     }
 
     private func setupToolbar() {
+        let saveButton = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.down"), primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            UIImageWriteToSavedPhotosAlbum(viewModel.image, self, #selector(imageSaveCompleted(_:didFinishSavingWithError:contextInfo:)), nil)
+        })
+        self.saveButton = saveButton
         let shareButton = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
             let itemSource = ImageActivityItemSource(image: viewModel.image)
@@ -134,9 +140,18 @@ private class ImageViewerViewController: UIViewController {
             present(activityVC, animated: true)
         })
         let spacer = UIBarButtonItem(systemItem: .flexibleSpace)
-        toolbarItems = [spacer, shareButton]
+        toolbarItems = [spacer, saveButton, shareButton]
         navigationController?.setToolbarHidden(!viewModel.showControls, animated: false)
         navigationController?.toolbar.backgroundColor = .clear
+    }
+
+    @objc private func imageSaveCompleted(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
+        if error == nil {
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+            saveButton?.image = UIImage(systemName: "square.and.arrow.down.fill")
+            saveButton?.isEnabled = false
+        }
     }
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
