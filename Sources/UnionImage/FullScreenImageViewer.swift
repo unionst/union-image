@@ -28,15 +28,16 @@ public final class ImageViewerController {
 
         activeImage = image
 
-        let viewModel = ImageViewerViewModel(
+        let viewerVC = ImageViewerViewController(
             image: image,
             sourceFrame: sourceFrame,
             sourceCornerRadius: sourceCornerRadius,
-            expandedCornerRadius: expandedCornerRadius
+            expandedCornerRadius: expandedCornerRadius,
+            showsControls: showsControls,
+            onDismiss: { [weak self] in
+                self?.dismiss()
+            }
         )
-        let viewerVC = ImageViewerViewController(viewModel: viewModel, showsControls: showsControls) { [weak self] in
-            self?.dismiss()
-        }
 
         let navController = UINavigationController(rootViewController: viewerVC)
         navController.view.backgroundColor = .clear
@@ -60,7 +61,7 @@ public final class ImageViewerController {
         window.layoutIfNeeded()
 
         DispatchQueue.main.async {
-            viewModel.expand()
+            viewerVC.expandImage()
         }
     }
 
@@ -80,22 +81,55 @@ public final class ImageViewerController {
 // MARK: - ImageViewerViewController
 
 private class ImageViewerViewController: UIViewController {
-    private let viewModel: ImageViewerViewModel
+    private let image: UIImage
+    private let sourceFrame: CGRect
+    private let sourceCornerRadius: CGFloat
+    private let expandedCornerRadius: CGFloat
     private let showsControls: Bool
     private let onDismiss: @MainActor () -> Void
-    private var hostingController: UIHostingController<ImageViewerOverlay>?
+
+    private let backgroundView = UIView()
+    private let imageView = UIImageView()
     private var saveButton: UIBarButtonItem?
+    private var controlsVisible = false
+    private var isDismissing = false
+
+    private var expandedFrame: CGRect {
+        let screenSize = UIScreen.main.bounds.size
+        let imageSize = image.size
+        let widthRatio = screenSize.width / imageSize.width
+        let heightRatio = screenSize.height / imageSize.height
+        let scale = min(widthRatio, heightRatio)
+        let scaledWidth = imageSize.width * scale
+        let scaledHeight = imageSize.height * scale
+        return CGRect(
+            x: (screenSize.width - scaledWidth) / 2,
+            y: (screenSize.height - scaledHeight) / 2,
+            width: scaledWidth,
+            height: scaledHeight
+        )
+    }
 
     override var prefersStatusBarHidden: Bool {
-        !viewModel.showControls && !viewModel.isDismissing
+        !controlsVisible && !isDismissing
     }
 
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation {
         .fade
     }
 
-    init(viewModel: ImageViewerViewModel, showsControls: Bool, onDismiss: @escaping @MainActor () -> Void) {
-        self.viewModel = viewModel
+    init(
+        image: UIImage,
+        sourceFrame: CGRect,
+        sourceCornerRadius: CGFloat,
+        expandedCornerRadius: CGFloat,
+        showsControls: Bool,
+        onDismiss: @escaping @MainActor () -> Void
+    ) {
+        self.image = image
+        self.sourceFrame = sourceFrame
+        self.sourceCornerRadius = sourceCornerRadius
+        self.expandedCornerRadius = expandedCornerRadius
         self.showsControls = showsControls
         self.onDismiss = onDismiss
         super.init(nibName: nil, bundle: nil)
@@ -109,23 +143,22 @@ private class ImageViewerViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
 
-        let overlay = ImageViewerOverlay(viewModel: viewModel)
-        let hosting = UIHostingController(rootView: overlay)
-        hosting.view.backgroundColor = .clear
+        backgroundView.backgroundColor = .black
+        backgroundView.alpha = 0
+        backgroundView.frame = view.bounds
+        backgroundView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(backgroundView)
 
-        addChild(hosting)
-        view.addSubview(hosting.view)
-        hosting.view.frame = view.bounds
-        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        hosting.didMove(toParent: self)
-
-        self.hostingController = hosting
+        imageView.image = image
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.bounds = CGRect(origin: .zero, size: sourceFrame.size)
+        imageView.center = CGPoint(x: sourceFrame.midX, y: sourceFrame.midY)
+        imageView.layer.cornerRadius = sourceCornerRadius
+        view.addSubview(imageView)
 
         setupNavigationBar()
-
-        if showsControls {
-            setupToolbar()
-        }
+        if showsControls { setupToolbar() }
 
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         view.addGestureRecognizer(panGesture)
@@ -134,32 +167,86 @@ private class ImageViewerViewController: UIViewController {
         view.addGestureRecognizer(tapGesture)
     }
 
+    func expandImage() {
+        let expanded = expandedFrame
+        UIView.animate(
+            withDuration: 0.5,
+            delay: 0,
+            usingSpringWithDamping: 0.85,
+            initialSpringVelocity: 0,
+            options: [],
+            animations: {
+                self.imageView.bounds.size = expanded.size
+                self.imageView.center = CGPoint(x: expanded.midX, y: expanded.midY)
+                self.imageView.layer.cornerRadius = self.expandedCornerRadius
+                self.backgroundView.alpha = 1
+            }
+        )
+    }
+
+    private func collapseImage(completion: @escaping @MainActor () -> Void) {
+        isDismissing = true
+        setNeedsStatusBarAppearanceUpdate()
+
+        if imageView.transform != .identity {
+            let t = imageView.transform
+            let scale = sqrt(t.a * t.a + t.c * t.c)
+            let visualWidth = imageView.bounds.width * scale
+            let visualHeight = imageView.bounds.height * scale
+            let visualCenter = CGPoint(
+                x: imageView.center.x + t.tx,
+                y: imageView.center.y + t.ty
+            )
+            UIView.performWithoutAnimation {
+                self.imageView.transform = .identity
+                self.imageView.bounds.size = CGSize(width: visualWidth, height: visualHeight)
+                self.imageView.center = visualCenter
+            }
+        }
+
+        UIView.animate(
+            withDuration: 0.35,
+            delay: 0,
+            usingSpringWithDamping: 0.85,
+            initialSpringVelocity: 0,
+            options: [.beginFromCurrentState],
+            animations: {
+                self.imageView.bounds.size = self.sourceFrame.size
+                self.imageView.center = CGPoint(x: self.sourceFrame.midX, y: self.sourceFrame.midY)
+                self.imageView.layer.cornerRadius = self.sourceCornerRadius
+                self.backgroundView.alpha = 0
+            },
+            completion: { _ in
+                completion()
+            }
+        )
+    }
+
     private func setupNavigationBar() {
         let closeButton = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
-            viewModel.collapse(completion: onDismiss)
-            setNeedsStatusBarAppearanceUpdate()
+            collapseImage(completion: onDismiss)
         })
         navigationItem.rightBarButtonItem = closeButton
-        navigationController?.setNavigationBarHidden(!viewModel.showControls, animated: false)
+        navigationController?.setNavigationBarHidden(!controlsVisible, animated: false)
     }
 
     private func setupToolbar() {
         let saveButton = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.down"), primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
-            UIImageWriteToSavedPhotosAlbum(viewModel.image, self, #selector(imageSaveCompleted(_:didFinishSavingWithError:contextInfo:)), nil)
+            UIImageWriteToSavedPhotosAlbum(image, self, #selector(imageSaveCompleted(_:didFinishSavingWithError:contextInfo:)), nil)
         })
         self.saveButton = saveButton
         let shareButton = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
-            let itemSource = ImageActivityItemSource(image: viewModel.image)
+            let itemSource = ImageActivityItemSource(image: image)
             let activityVC = UIActivityViewController(activityItems: [itemSource], applicationActivities: nil)
             activityVC.popoverPresentationController?.barButtonItem = self.toolbarItems?.last
             present(activityVC, animated: true)
         })
         let spacer = UIBarButtonItem(systemItem: .flexibleSpace)
         toolbarItems = [spacer, saveButton, shareButton]
-        navigationController?.setToolbarHidden(!viewModel.showControls, animated: false)
+        navigationController?.setToolbarHidden(!controlsVisible, animated: false)
         navigationController?.toolbar.backgroundColor = .clear
     }
 
@@ -177,23 +264,35 @@ private class ImageViewerViewController: UIViewController {
 
         switch gesture.state {
         case .changed:
-            viewModel.dragOffset = translation.y
-            viewModel.dragOffsetX = translation.x
+            let progress = min(max(translation.y, 0) / 300, 1)
+            let dampedX = translation.x / (1 + abs(translation.x) / 100)
+            let offsetY = translation.y > 0 ? translation.y : 0
+            let scale = 1 - progress * 0.1
+
+            imageView.transform = CGAffineTransform(translationX: dampedX, y: offsetY)
+                .scaledBy(x: scale, y: scale)
+            backgroundView.alpha = 1 - progress
+
         case .ended, .cancelled:
             let velocity = gesture.velocity(in: view).y
             let shouldDismiss = translation.y > 100 || velocity > 300
 
             if shouldDismiss {
-                viewModel.collapse { [onDismiss] in
-                    onDismiss()
-                }
-                setNeedsStatusBarAppearanceUpdate()
+                collapseImage(completion: onDismiss)
             } else {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                    viewModel.dragOffset = 0
-                    viewModel.dragOffsetX = 0
-                }
+                UIView.animate(
+                    withDuration: 0.4,
+                    delay: 0,
+                    usingSpringWithDamping: 0.85,
+                    initialSpringVelocity: 0,
+                    options: [],
+                    animations: {
+                        self.imageView.transform = .identity
+                        self.backgroundView.alpha = 1
+                    }
+                )
             }
+
         default:
             break
         }
@@ -201,10 +300,10 @@ private class ImageViewerViewController: UIViewController {
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         guard showsControls else { return }
-        viewModel.showControls.toggle()
+        controlsVisible.toggle()
         UIView.animate(withDuration: 0.2) {
-            self.navigationController?.setNavigationBarHidden(!self.viewModel.showControls, animated: true)
-            self.navigationController?.setToolbarHidden(!self.viewModel.showControls, animated: true)
+            self.navigationController?.setNavigationBarHidden(!self.controlsVisible, animated: true)
+            self.navigationController?.setToolbarHidden(!self.controlsVisible, animated: true)
             self.setNeedsStatusBarAppearanceUpdate()
         }
     }
@@ -233,120 +332,6 @@ private final class ImageActivityItemSource: NSObject, UIActivityItemSource {
         metadata.title = "Image"
         metadata.imageProvider = NSItemProvider(object: image)
         return metadata
-    }
-}
-
-// MARK: - ViewModel
-
-@Observable @MainActor
-private final class ImageViewerViewModel {
-    let image: UIImage
-    let sourceFrame: CGRect
-    let sourceCornerRadius: CGFloat
-    let expandedCornerRadius: CGFloat
-
-    var currentFrame: CGRect
-    var currentCornerRadius: CGFloat
-    var backgroundOpacity: Double = 0
-    var showControls = false
-    var dragOffset: CGFloat = 0
-    var dragOffsetX: CGFloat = 0
-
-    var isExpanded = false
-    var isDismissing = false
-
-    var dragProgress: CGFloat {
-        min(max(dragOffset, 0) / 300, 1)
-    }
-
-    var dampedDragOffsetX: CGFloat {
-        let maxResistance: CGFloat = 100
-        return dragOffsetX / (1 + abs(dragOffsetX) / maxResistance)
-    }
-
-    var screenBounds: CGRect {
-        UIScreen.main.bounds
-    }
-
-    var expandedFrame: CGRect {
-        let screenSize = screenBounds.size
-        let imageSize = image.size
-        let widthRatio = screenSize.width / imageSize.width
-        let heightRatio = screenSize.height / imageSize.height
-        let scale = min(widthRatio, heightRatio)
-
-        let scaledWidth = imageSize.width * scale
-        let scaledHeight = imageSize.height * scale
-
-        return CGRect(
-            x: (screenSize.width - scaledWidth) / 2,
-            y: (screenSize.height - scaledHeight) / 2,
-            width: scaledWidth,
-            height: scaledHeight
-        )
-    }
-
-    init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0, expandedCornerRadius: CGFloat = 0) {
-        self.image = image
-        self.sourceFrame = sourceFrame
-        self.sourceCornerRadius = sourceCornerRadius
-        self.expandedCornerRadius = expandedCornerRadius
-        self.currentFrame = sourceFrame
-        self.currentCornerRadius = sourceCornerRadius
-    }
-
-    func expand() {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-            currentFrame = expandedFrame
-            currentCornerRadius = expandedCornerRadius
-            backgroundOpacity = 1
-            isExpanded = true
-        }
-    }
-
-    func collapse(completion: @escaping @MainActor () -> Void) {
-        isDismissing = true
-
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-            currentFrame = sourceFrame
-            currentCornerRadius = sourceCornerRadius
-            backgroundOpacity = 0
-            dragOffset = 0
-            dragOffsetX = 0
-            showControls = false
-            isExpanded = false
-        }
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(0.3))
-            completion()
-        }
-    }
-}
-
-// MARK: - Overlay View
-
-private struct ImageViewerOverlay: View {
-    @Bindable var viewModel: ImageViewerViewModel
-
-    var body: some View {
-        ZStack {
-            Color.black
-                .opacity(viewModel.backgroundOpacity * (1 - viewModel.dragProgress))
-                .ignoresSafeArea()
-
-            Image(uiImage: viewModel.image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: viewModel.currentCornerRadius))
-                .scaleEffect(1 - viewModel.dragProgress * 0.1)
-                .position(
-                    x: viewModel.currentFrame.midX + viewModel.dampedDragOffsetX,
-                    y: viewModel.currentFrame.midY + (viewModel.dragOffset > 0 ? viewModel.dragOffset : 0)
-                )
-        }
-        .ignoresSafeArea()
     }
 }
 
