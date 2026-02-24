@@ -270,43 +270,20 @@ private final class ImageViewerViewModel {
 
     var expandedFrame: CGRect {
         let screenSize = screenBounds.size
+        let imageSize = image.size
+        let widthRatio = screenSize.width / imageSize.width
+        let heightRatio = screenSize.height / imageSize.height
+        let scale = min(widthRatio, heightRatio)
 
-        let sourceAspect = sourceFrame.width / sourceFrame.height
-        let isSourceSquare = abs(sourceAspect - 1.0) < 0.1
+        let scaledWidth = imageSize.width * scale
+        let scaledHeight = imageSize.height * scale
 
-        if isSourceSquare {
-            let size = min(screenSize.width, screenSize.height)
-            return CGRect(
-                x: (screenSize.width - size) / 2,
-                y: (screenSize.height - size) / 2,
-                width: size,
-                height: size
-            )
-        } else {
-            let imageSize = image.size
-            let widthRatio = screenSize.width / imageSize.width
-            let heightRatio = screenSize.height / imageSize.height
-            let scale = min(widthRatio, heightRatio)
-
-            let scaledWidth = imageSize.width * scale
-            let scaledHeight = imageSize.height * scale
-
-            return CGRect(
-                x: (screenSize.width - scaledWidth) / 2,
-                y: (screenSize.height - scaledHeight) / 2,
-                width: scaledWidth,
-                height: scaledHeight
-            )
-        }
-    }
-
-    var currentAspectRatio: CGFloat {
-        guard currentFrame.height > 0 else { return 1 }
-        return currentFrame.width / currentFrame.height
-    }
-
-    var shouldUseFillMode: Bool {
-        abs(currentAspectRatio - 1.0) < 0.1
+        return CGRect(
+            x: (screenSize.width - scaledWidth) / 2,
+            y: (screenSize.height - scaledHeight) / 2,
+            width: scaledWidth,
+            height: scaledHeight
+        )
     }
 
     init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0, expandedCornerRadius: CGFloat = 0) {
@@ -359,8 +336,9 @@ private struct ImageViewerOverlay: View {
 
             Image(uiImage: viewModel.image)
                 .resizable()
-                .aspectRatio(contentMode: viewModel.shouldUseFillMode ? .fill : .fit)
+                .aspectRatio(contentMode: .fill)
                 .frame(width: viewModel.currentFrame.width, height: viewModel.currentFrame.height)
+                .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: viewModel.currentCornerRadius))
                 .scaleEffect(1 - viewModel.dragProgress * 0.1)
                 .position(
