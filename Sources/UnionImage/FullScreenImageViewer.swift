@@ -15,15 +15,26 @@ public final class ImageViewerController {
 
     private init() {}
 
-    public func show(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0) {
+    public func show(
+        image: UIImage,
+        sourceFrame: CGRect,
+        sourceCornerRadius: CGFloat = 0,
+        expandedCornerRadius: CGFloat = 0,
+        showsControls: Bool = true
+    ) {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first else { return }
 
         activeImage = image
 
-        let viewModel = ImageViewerViewModel(image: image, sourceFrame: sourceFrame, sourceCornerRadius: sourceCornerRadius)
-        let viewerVC = ImageViewerViewController(viewModel: viewModel) { [weak self] in
+        let viewModel = ImageViewerViewModel(
+            image: image,
+            sourceFrame: sourceFrame,
+            sourceCornerRadius: sourceCornerRadius,
+            expandedCornerRadius: expandedCornerRadius
+        )
+        let viewerVC = ImageViewerViewController(viewModel: viewModel, showsControls: showsControls) { [weak self] in
             self?.dismiss()
         }
 
@@ -46,7 +57,9 @@ public final class ImageViewerController {
         self.overlayWindow = window
         self.viewerViewController = viewerVC
 
-        Task { @MainActor in
+        window.layoutIfNeeded()
+
+        DispatchQueue.main.async {
             viewModel.expand()
         }
     }
@@ -68,6 +81,7 @@ public final class ImageViewerController {
 
 private class ImageViewerViewController: UIViewController {
     private let viewModel: ImageViewerViewModel
+    private let showsControls: Bool
     private let onDismiss: @MainActor () -> Void
     private var hostingController: UIHostingController<ImageViewerOverlay>?
     private var saveButton: UIBarButtonItem?
@@ -80,8 +94,9 @@ private class ImageViewerViewController: UIViewController {
         .fade
     }
 
-    init(viewModel: ImageViewerViewModel, onDismiss: @escaping @MainActor () -> Void) {
+    init(viewModel: ImageViewerViewModel, showsControls: Bool, onDismiss: @escaping @MainActor () -> Void) {
         self.viewModel = viewModel
+        self.showsControls = showsControls
         self.onDismiss = onDismiss
         super.init(nibName: nil, bundle: nil)
     }
@@ -107,7 +122,10 @@ private class ImageViewerViewController: UIViewController {
         self.hostingController = hosting
 
         setupNavigationBar()
-        setupToolbar()
+
+        if showsControls {
+            setupToolbar()
+        }
 
         let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         view.addGestureRecognizer(panGesture)
@@ -182,6 +200,7 @@ private class ImageViewerViewController: UIViewController {
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        guard showsControls else { return }
         viewModel.showControls.toggle()
         UIView.animate(withDuration: 0.2) {
             self.navigationController?.setNavigationBarHidden(!self.viewModel.showControls, animated: true)
@@ -224,6 +243,7 @@ private final class ImageViewerViewModel {
     let image: UIImage
     let sourceFrame: CGRect
     let sourceCornerRadius: CGFloat
+    let expandedCornerRadius: CGFloat
 
     var currentFrame: CGRect
     var currentCornerRadius: CGFloat
@@ -286,38 +306,28 @@ private final class ImageViewerViewModel {
     }
 
     var shouldUseFillMode: Bool {
-        let useFill = abs(currentAspectRatio - 1.0) < 0.1
-        if currentFrame != sourceFrame && currentFrame != expandedFrame {
-            print("[Zoom] Current: \(currentFrame.width)x\(currentFrame.height), aspect: \(currentAspectRatio), useFill: \(useFill)")
-        }
-        return useFill
+        abs(currentAspectRatio - 1.0) < 0.1
     }
 
-    init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0) {
+    init(image: UIImage, sourceFrame: CGRect, sourceCornerRadius: CGFloat = 0, expandedCornerRadius: CGFloat = 0) {
         self.image = image
         self.sourceFrame = sourceFrame
         self.sourceCornerRadius = sourceCornerRadius
+        self.expandedCornerRadius = expandedCornerRadius
         self.currentFrame = sourceFrame
         self.currentCornerRadius = sourceCornerRadius
     }
 
     func expand() {
-        print("[Zoom] Source frame: \(sourceFrame.width)x\(sourceFrame.height), corner: \(sourceCornerRadius)")
-        print("[Zoom] Expanded frame: \(expandedFrame.width)x\(expandedFrame.height)")
-        print("[Zoom] Source aspect: \(sourceFrame.width / sourceFrame.height)")
-        print("[Zoom] Expanded aspect: \(expandedFrame.width / expandedFrame.height)")
-
         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
             currentFrame = expandedFrame
-            currentCornerRadius = 0
+            currentCornerRadius = expandedCornerRadius
             backgroundOpacity = 1
             isExpanded = true
         }
     }
 
     func collapse(completion: @escaping @MainActor () -> Void) {
-        print("[Zoom] Collapsing from \(currentFrame.width)x\(currentFrame.height) to \(sourceFrame.width)x\(sourceFrame.height)")
-
         isDismissing = true
 
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
@@ -367,14 +377,18 @@ private struct ImageViewerOverlay: View {
 public struct ZoomableImage: View {
     private let uiImage: UIImage
     private let sourceCornerRadius: CGFloat
+    private let expandedCornerRadius: CGFloat
+    private let showsControls: Bool
 
     private var isActive: Bool {
         ImageViewerController.shared.activeImage === uiImage
     }
 
-    public init(uiImage: UIImage, sourceCornerRadius: CGFloat = 0) {
+    public init(uiImage: UIImage, sourceCornerRadius: CGFloat = 0, expandedCornerRadius: CGFloat = 0, showsControls: Bool = true) {
         self.uiImage = uiImage
         self.sourceCornerRadius = sourceCornerRadius
+        self.expandedCornerRadius = expandedCornerRadius
+        self.showsControls = showsControls
     }
 
     public var body: some View {
@@ -387,7 +401,13 @@ public struct ZoomableImage: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     let frame = geo.frame(in: .global)
-                    ImageViewerController.shared.show(image: uiImage, sourceFrame: frame, sourceCornerRadius: sourceCornerRadius)
+                    ImageViewerController.shared.show(
+                        image: uiImage,
+                        sourceFrame: frame,
+                        sourceCornerRadius: sourceCornerRadius,
+                        expandedCornerRadius: expandedCornerRadius,
+                        showsControls: showsControls
+                    )
                 }
         }
     }
