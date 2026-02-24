@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "union-image",
-    platforms: [.iOS(.v26)],
+    platforms: [.iOS(.v17)],
     products: [
         .library(
             name: "UnionImage",
