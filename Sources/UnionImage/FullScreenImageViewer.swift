@@ -80,7 +80,7 @@ public final class ImageViewerController {
 
 // MARK: - ImageViewerViewController
 
-private class ImageViewerViewController: UIViewController {
+private class ImageViewerViewController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let image: UIImage
     private let sourceFrame: CGRect
     private let sourceCornerRadius: CGFloat
@@ -90,6 +90,9 @@ private class ImageViewerViewController: UIViewController {
 
     private let backgroundView = UIView()
     private let imageView = UIImageView()
+    private var scrollView: UIScrollView?
+    private var panGesture: UIPanGestureRecognizer!
+    private var singleTapGesture: UITapGestureRecognizer!
     private var saveButton: UIBarButtonItem?
     private var controlsVisible = false
     private var isDismissing = false
@@ -160,11 +163,13 @@ private class ImageViewerViewController: UIViewController {
         setupNavigationBar()
         if showsControls { setupToolbar() }
 
-        let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        panGesture.delegate = self
         view.addGestureRecognizer(panGesture)
 
-        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        view.addGestureRecognizer(tapGesture)
+        singleTapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        singleTapGesture.numberOfTapsRequired = 1
+        view.addGestureRecognizer(singleTapGesture)
     }
 
     func expandImage() {
@@ -180,11 +185,78 @@ private class ImageViewerViewController: UIViewController {
                 self.imageView.center = CGPoint(x: expanded.midX, y: expanded.midY)
                 self.imageView.layer.cornerRadius = self.expandedCornerRadius
                 self.backgroundView.alpha = 1
+            },
+            completion: { _ in
+                self.installScrollView()
             }
         )
     }
 
+    private func installScrollView() {
+        let sv = UIScrollView(frame: view.bounds)
+        sv.delegate = self
+        sv.minimumZoomScale = 1.0
+        sv.maximumZoomScale = 5.0
+        sv.showsHorizontalScrollIndicator = false
+        sv.showsVerticalScrollIndicator = false
+        sv.contentInsetAdjustmentBehavior = .never
+        sv.bouncesZoom = true
+
+        let expanded = expandedFrame
+        imageView.removeFromSuperview()
+        imageView.transform = .identity
+        imageView.frame = CGRect(origin: .zero, size: expanded.size)
+        sv.addSubview(imageView)
+        sv.contentSize = expanded.size
+
+        view.insertSubview(sv, aboveSubview: backgroundView)
+        self.scrollView = sv
+
+        scrollViewDidZoom(sv)
+
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        sv.addGestureRecognizer(doubleTap)
+        singleTapGesture.require(toFail: doubleTap)
+    }
+
+    private func uninstallScrollView() {
+        guard let sv = scrollView else { return }
+        sv.setZoomScale(1.0, animated: false)
+        let expanded = expandedFrame
+        imageView.removeFromSuperview()
+        imageView.transform = .identity
+        imageView.bounds.size = expanded.size
+        imageView.center = CGPoint(x: expanded.midX, y: expanded.midY)
+        view.addSubview(imageView)
+        sv.removeFromSuperview()
+        self.scrollView = nil
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        imageView
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        let imageSize = imageView.frame.size
+        let scrollSize = scrollView.bounds.size
+        let verticalInset = max(0, (scrollSize.height - imageSize.height) / 2)
+        let horizontalInset = max(0, (scrollSize.width - imageSize.width) / 2)
+        scrollView.contentInset = UIEdgeInsets(
+            top: verticalInset, left: horizontalInset,
+            bottom: verticalInset, right: horizontalInset
+        )
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === panGesture {
+            return scrollView?.zoomScale ?? 1.0 <= 1.01
+        }
+        return true
+    }
+
     private func collapseImage(completion: @escaping @MainActor () -> Void) {
+        uninstallScrollView()
         isDismissing = true
         setNeedsStatusBarAppearanceUpdate()
 
@@ -259,10 +331,32 @@ private class ImageViewerViewController: UIViewController {
         }
     }
 
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        guard let sv = scrollView else { return }
+        if sv.zoomScale > sv.minimumZoomScale {
+            sv.setZoomScale(sv.minimumZoomScale, animated: true)
+        } else {
+            let point = gesture.location(in: imageView)
+            let targetScale: CGFloat = 3.0
+            let width = sv.bounds.width / targetScale
+            let height = sv.bounds.height / targetScale
+            let rect = CGRect(
+                x: point.x - width / 2,
+                y: point.y - height / 2,
+                width: width,
+                height: height
+            )
+            sv.zoom(to: rect, animated: true)
+        }
+    }
+
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         let translation = gesture.translation(in: view)
 
         switch gesture.state {
+        case .began:
+            uninstallScrollView()
+
         case .changed:
             let progress = min(max(translation.y, 0) / 300, 1)
             let dampedX = translation.x / (1 + abs(translation.x) / 100)
@@ -289,6 +383,9 @@ private class ImageViewerViewController: UIViewController {
                     animations: {
                         self.imageView.transform = .identity
                         self.backgroundView.alpha = 1
+                    },
+                    completion: { _ in
+                        self.installScrollView()
                     }
                 )
             }
