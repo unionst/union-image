@@ -249,15 +249,23 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if isDismissing { return false }
         if gestureRecognizer === panGesture {
             return scrollView?.zoomScale ?? 1.0 <= 1.01
         }
         return true
     }
 
+    // The overlay window outlives the collapse animation, so a finger that lands
+    // on the way out would otherwise start a second dismiss pan: its downward
+    // translation is zero, which repaints the background to full black over a
+    // viewer that is already halfway gone. Standing the whole window down hands
+    // that touch to the content underneath, which is where it was aimed.
     private func collapseImage(completion: @escaping @MainActor () -> Void) {
+        guard !isDismissing else { return }
         uninstallScrollView()
         isDismissing = true
+        view.window?.isUserInteractionEnabled = false
         setNeedsStatusBarAppearanceUpdate()
 
         if imageView.transform != .identity {
