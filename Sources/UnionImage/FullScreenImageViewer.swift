@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 import UIKit
 import LinkPresentation
@@ -15,12 +16,47 @@ public final class ImageViewerController {
 
     private init() {}
 
+    /// Opens an image that nothing on screen is showing -- a card rendered a
+    /// moment ago, say. There is no frame to grow out of, and handing the
+    /// expanding presentation an invented one reads as the image being blown
+    /// up out of whatever button was tapped. This arrives at full size out of
+    /// a blur instead, and dissolves back into one on the way out.
+    public func show(
+        image: UIImage,
+        expandedCornerRadius: CGFloat = 0,
+        showsControls: Bool = true
+    ) {
+        show(
+            image: image,
+            sourceFrame: nil,
+            sourceCornerRadius: 0,
+            expandedCornerRadius: expandedCornerRadius,
+            showsControls: showsControls
+        )
+    }
+
     public func show(
         image: UIImage,
         sourceFrame: CGRect,
         sourceCornerRadius: CGFloat = 0,
         expandedCornerRadius: CGFloat = 0,
         showsControls: Bool = true
+    ) {
+        show(
+            image: image,
+            sourceFrame: .some(sourceFrame),
+            sourceCornerRadius: sourceCornerRadius,
+            expandedCornerRadius: expandedCornerRadius,
+            showsControls: showsControls
+        )
+    }
+
+    private func show(
+        image: UIImage,
+        sourceFrame: CGRect?,
+        sourceCornerRadius: CGFloat,
+        expandedCornerRadius: CGFloat,
+        showsControls: Bool
     ) {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
@@ -82,7 +118,9 @@ public final class ImageViewerController {
 
 private class ImageViewerViewController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let image: UIImage
-    private let sourceFrame: CGRect
+    // nil means there was nothing on screen to grow out of, so the viewer
+    // dissolves in and out at full size instead of expanding.
+    private let sourceFrame: CGRect?
     private let sourceCornerRadius: CGFloat
     private let expandedCornerRadius: CGFloat
     private let showsControls: Bool
@@ -90,6 +128,11 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
     private let backgroundView = UIView()
     private let imageView = UIImageView()
+    // The blurred copy rides on top of the sharp one and is faded away, which
+    // is the only way to animate a blur on an image view: there is no
+    // animatable blur radius, and a UIVisualEffectView over it would sample
+    // the backdrop rather than resolve the picture.
+    private let blurView = UIImageView()
     private var scrollView: UIScrollView?
     private var panGesture: UIPanGestureRecognizer!
     private var singleTapGesture: UITapGestureRecognizer!
@@ -121,9 +164,11 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         .fade
     }
 
+    private var dissolves: Bool { sourceFrame == nil }
+
     init(
         image: UIImage,
-        sourceFrame: CGRect,
+        sourceFrame: CGRect?,
         sourceCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
         showsControls: Bool,
@@ -155,10 +200,28 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         imageView.image = image
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
-        imageView.bounds = CGRect(origin: .zero, size: sourceFrame.size)
-        imageView.center = CGPoint(x: sourceFrame.midX, y: sourceFrame.midY)
-        imageView.layer.cornerRadius = sourceCornerRadius
-        view.addSubview(imageView)
+
+        if let sourceFrame {
+            imageView.bounds = CGRect(origin: .zero, size: sourceFrame.size)
+            imageView.center = CGPoint(x: sourceFrame.midX, y: sourceFrame.midY)
+            imageView.layer.cornerRadius = sourceCornerRadius
+            view.addSubview(imageView)
+        } else {
+            let expanded = expandedFrame
+            imageView.bounds = CGRect(origin: .zero, size: expanded.size)
+            imageView.center = CGPoint(x: expanded.midX, y: expanded.midY)
+            imageView.layer.cornerRadius = expandedCornerRadius
+            imageView.alpha = 0
+            view.addSubview(imageView)
+
+            blurView.image = Self.blurred(image)
+            blurView.contentMode = .scaleAspectFill
+            blurView.clipsToBounds = true
+            blurView.frame = imageView.bounds
+            blurView.layer.cornerRadius = expandedCornerRadius
+            blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            imageView.addSubview(blurView)
+        }
 
         setupNavigationBar()
         if showsControls { setupToolbar() }
@@ -173,6 +236,18 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     }
 
     func expandImage() {
+        guard !dissolves else {
+            UIView.animate(withDuration: 0.4, delay: 0, options: [.curveEaseOut]) {
+                self.imageView.alpha = 1
+                self.blurView.alpha = 0
+                self.backgroundView.alpha = 1
+            } completion: { _ in
+                self.blurView.removeFromSuperview()
+                self.installScrollView()
+            }
+            return
+        }
+
         let expanded = expandedFrame
         UIView.animate(
             withDuration: 0.5,
@@ -268,6 +343,24 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         view.window?.isUserInteractionEnabled = false
         setNeedsStatusBarAppearanceUpdate()
 
+        if dissolves {
+            // Back into the blur it came out of. Re-added rather than kept
+            // around so the zoom it was handed to in between never had a
+            // stale copy of the picture sitting on top of it.
+            blurView.alpha = 0
+            blurView.frame = imageView.bounds
+            imageView.addSubview(blurView)
+
+            UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                self.imageView.alpha = 0
+                self.blurView.alpha = 1
+                self.backgroundView.alpha = 0
+            } completion: { _ in
+                completion()
+            }
+            return
+        }
+
         if imageView.transform != .identity {
             let t = imageView.transform
             let scale = sqrt(t.a * t.a + t.c * t.c)
@@ -291,8 +384,9 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             initialSpringVelocity: 0,
             options: [.beginFromCurrentState],
             animations: {
-                self.imageView.bounds.size = self.sourceFrame.size
-                self.imageView.center = CGPoint(x: self.sourceFrame.midX, y: self.sourceFrame.midY)
+                guard let source = self.sourceFrame else { return }
+                self.imageView.bounds.size = source.size
+                self.imageView.center = CGPoint(x: source.midX, y: source.midY)
                 self.imageView.layer.cornerRadius = self.sourceCornerRadius
                 self.backgroundView.alpha = 0
             },
@@ -411,6 +505,31 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             self.navigationController?.setToolbarHidden(!self.controlsVisible, animated: true)
             self.setNeedsStatusBarAppearanceUpdate()
         }
+    }
+}
+
+private extension ImageViewerViewController {
+    // Blurred small and scaled back up: a blur is all low frequencies, so the
+    // downsample is invisible in the result and turns a full-size Gaussian on
+    // a story-sized card into something that does not stall the first frame.
+    // Clamping first stops the edges bleeding to transparent.
+    static func blurred(_ image: UIImage) -> UIImage? {
+        let longest = max(image.size.width, image.size.height)
+        guard longest > 0 else { return nil }
+
+        let scale = min(1, 400 / longest)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let small = UIGraphicsImageRenderer(size: size).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+
+        guard let input = CIImage(image: small), let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(12.0, forKey: kCIInputRadiusKey)
+
+        guard let output = filter.outputImage,
+              let cgImage = CIContext().createCGImage(output, from: input.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }
 
