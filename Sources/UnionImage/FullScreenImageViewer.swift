@@ -128,10 +128,16 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
     private let backgroundView = UIView()
     private let imageView = UIImageView()
-    // The blurred copy rides on top of the sharp one and is faded away, which
-    // is the only way to animate a blur on an image view: there is no
-    // animatable blur radius, and a UIVisualEffectView over it would sample
-    // the backdrop rather than resolve the picture.
+    // The dissolve needs three layers, not two. A blurred copy of the picture
+    // is laid over the sharp one and faded, which is the only way to animate a
+    // blur on an image view -- there is no animatable blur radius, and a
+    // visual-effect view samples the backdrop rather than resolving the
+    // picture. But the two copies have to sit inside something that owns the
+    // opacity and the scale, or the container's own fade multiplies the blur
+    // down as well and all you get is a plain fade. That is what `contentView`
+    // is for: it carries alpha and transform, and blurView's alpha alone
+    // decides how much of the picture is resolved.
+    private let contentView = UIView()
     private let blurView = UIImageView()
     private var scrollView: UIScrollView?
     private var panGesture: UIPanGestureRecognizer!
@@ -207,20 +213,23 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             imageView.layer.cornerRadius = sourceCornerRadius
             view.addSubview(imageView)
         } else {
-            let expanded = expandedFrame
-            imageView.bounds = CGRect(origin: .zero, size: expanded.size)
-            imageView.center = CGPoint(x: expanded.midX, y: expanded.midY)
-            imageView.layer.cornerRadius = expandedCornerRadius
-            imageView.alpha = 0
-            view.addSubview(imageView)
+            contentView.frame = expandedFrame
+            contentView.clipsToBounds = true
+            contentView.layer.cornerRadius = expandedCornerRadius
+            contentView.alpha = 0
+            contentView.transform = Self.arrivalScale
+            view.addSubview(contentView)
+
+            imageView.frame = contentView.bounds
+            imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            contentView.addSubview(imageView)
 
             blurView.image = Self.blurred(image)
             blurView.contentMode = .scaleAspectFill
             blurView.clipsToBounds = true
-            blurView.frame = imageView.bounds
-            blurView.layer.cornerRadius = expandedCornerRadius
+            blurView.frame = contentView.bounds
             blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            imageView.addSubview(blurView)
+            contentView.addSubview(blurView)
         }
 
         setupNavigationBar()
@@ -237,13 +246,28 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
     func expandImage() {
         guard !dissolves else {
-            UIView.animate(withDuration: 0.4, delay: 0, options: [.curveEaseOut]) {
-                self.imageView.alpha = 1
+            // Scale and opacity spring in together; the blur is given its own,
+            // slightly longer pass so the picture is still resolving after it
+            // has finished arriving rather than landing already sharp.
+            UIView.animate(
+                withDuration: 0.42,
+                delay: 0,
+                usingSpringWithDamping: 0.74,
+                initialSpringVelocity: 0,
+                options: [],
+                animations: {
+                    self.contentView.transform = .identity
+                    self.contentView.alpha = 1
+                    self.backgroundView.alpha = 1
+                }
+            )
+
+            UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseOut]) {
                 self.blurView.alpha = 0
-                self.backgroundView.alpha = 1
             } completion: { _ in
                 self.blurView.removeFromSuperview()
                 self.installScrollView()
+                self.contentView.removeFromSuperview()
             }
             return
         }
@@ -344,20 +368,41 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         setNeedsStatusBarAppearanceUpdate()
 
         if dissolves {
-            // Back into the blur it came out of. Re-added rather than kept
-            // around so the zoom it was handed to in between never had a
-            // stale copy of the picture sitting on top of it.
-            blurView.alpha = 0
-            blurView.frame = imageView.bounds
-            imageView.addSubview(blurView)
+            // A drag leaves the picture off-centre and part-scaled. It goes out
+            // the way it came in regardless -- back to the middle, down to the
+            // arrival scale, blurring as it fades -- so the wrapper picks the
+            // drag's transform up first and the snap home starts from exactly
+            // where the finger left it.
+            let dragged = imageView.transform
+            contentView.frame = expandedFrame
+            contentView.transform = dragged
+            contentView.alpha = 1
+            view.addSubview(contentView)
 
-            UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
-                self.imageView.alpha = 0
-                self.blurView.alpha = 1
-                self.backgroundView.alpha = 0
-            } completion: { _ in
-                completion()
-            }
+            imageView.transform = .identity
+            imageView.frame = contentView.bounds
+            contentView.addSubview(imageView)
+
+            blurView.alpha = 0
+            blurView.frame = contentView.bounds
+            contentView.addSubview(blurView)
+
+            UIView.animate(
+                withDuration: 0.28,
+                delay: 0,
+                usingSpringWithDamping: 0.9,
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState],
+                animations: {
+                    self.contentView.transform = Self.arrivalScale
+                    self.contentView.alpha = 0
+                    self.blurView.alpha = 1
+                    self.backgroundView.alpha = 0
+                },
+                completion: { _ in
+                    completion()
+                }
+            )
             return
         }
 
@@ -509,6 +554,10 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 }
 
 private extension ImageViewerViewController {
+    // Small enough to read as the picture coming towards you, not so much that
+    // it looks like it is being thrown from somewhere.
+    static var arrivalScale: CGAffineTransform { CGAffineTransform(scaleX: 0.86, y: 0.86) }
+
     // Blurred small and scaled back up: a blur is all low frequencies, so the
     // downsample is invisible in the result and turns a full-size Gaussian on
     // a story-sized card into something that does not stall the first frame.
