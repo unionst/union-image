@@ -366,7 +366,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     // translation is zero, which repaints the background to full black over a
     // viewer that is already halfway gone. Standing the whole window down hands
     // that touch to the content underneath, which is where it was aimed.
-    private func collapseImage(velocity: CGPoint = .zero, completion: @escaping @MainActor () -> Void) {
+    private func collapseImage(completion: @escaping @MainActor () -> Void) {
         guard !isDismissing else { return }
         uninstallScrollView()
         isDismissing = true
@@ -374,20 +374,10 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         setNeedsStatusBarAppearanceUpdate()
 
         if dissolves {
-            // A drag leaves the picture off-centre and part-scaled. A release
-            // keeps going the way the finger was moving -- carrying its
-            // velocity a little further while it shrinks, blurs and fades --
-            // rather than stopping dead and reversing back to the middle,
-            // which read as the picture being yanked out of the hand. Only a
-            // button close, with no drag behind it, goes home to the arrival
-            // scale.
+            // Wherever a drag left it, the picture goes home: back to the
+            // middle and down to well short of full size, blurring and fading
+            // as it travels, all on one spring.
             let dragged = imageView.transform
-            let draggedScale = sqrt(dragged.a * dragged.a + dragged.c * dragged.c)
-            let carry = Self.carriedTravel(for: velocity)
-            let exit = dragged == .identity
-                ? Self.arrivalScale
-                : CGAffineTransform(translationX: dragged.tx + carry.x, y: dragged.ty + carry.y)
-                    .scaledBy(x: draggedScale * 0.86, y: draggedScale * 0.86)
             contentView.frame = expandedFrame
             contentView.transform = dragged
             contentView.alpha = 1
@@ -408,24 +398,31 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             )
             contentView.addSubview(blurView)
 
-            UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut]) {
-                self.imageView.alpha = 0
-                self.blurView.alpha = 1
-            }
-
+            let duration = 0.4
             UIView.animate(
-                withDuration: 0.3,
+                withDuration: duration,
                 delay: 0,
-                options: [.curveEaseOut, .beginFromCurrentState],
+                usingSpringWithDamping: 0.85,
+                initialSpringVelocity: 0,
+                options: [.beginFromCurrentState],
                 animations: {
-                    self.contentView.transform = exit
-                    self.contentView.alpha = 0
+                    self.contentView.transform = Self.departureScale
                     self.backgroundView.alpha = 0
                 },
                 completion: { _ in
                     completion()
                 }
             )
+
+            UIView.animateKeyframes(withDuration: duration, delay: 0, options: [.beginFromCurrentState]) {
+                UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.45) {
+                    self.imageView.alpha = 0
+                    self.blurView.alpha = 1
+                }
+                UIView.addKeyframe(withRelativeStartTime: 0.15, relativeDuration: 0.85) {
+                    self.contentView.alpha = 0
+                }
+            }
             return
         }
 
@@ -545,11 +542,11 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             backgroundView.alpha = 1 - progress
 
         case .ended, .cancelled:
-            let velocity = gesture.velocity(in: view)
-            let shouldDismiss = translation.y > 100 || velocity.y > 300
+            let velocity = gesture.velocity(in: view).y
+            let shouldDismiss = translation.y > 100 || velocity > 300
 
             if shouldDismiss {
-                collapseImage(velocity: velocity, completion: onDismiss)
+                collapseImage(completion: onDismiss)
             } else {
                 UIView.animate(
                     withDuration: 0.4,
@@ -588,23 +585,15 @@ private extension ImageViewerViewController {
     // it looks like it is being thrown from somewhere.
     static var arrivalScale: CGAffineTransform { CGAffineTransform(scaleX: 0.86, y: 0.86) }
 
+    // Where the picture goes on the way out: the middle, at well under full
+    // size, so the trip home reads as a trip.
+    static var departureScale: CGAffineTransform { CGAffineTransform(scaleX: 0.7, y: 0.7) }
+
     // How far past its own edge the blurred copy is allowed to spill, as a
     // fraction of the picture's size. The bleed is what turns the card's hard
     // outline soft on the way out; without it the edge stays razor sharp while
     // the inside goes to mush and the thing never reads as blurring.
     static var exitBlurBleed: CGFloat { 0.08 }
-
-    // How much further a released picture travels on its own: the finger's
-    // velocity over the first stretch of the exit, capped so a hard fling
-    // still fades out on screen instead of leaving it.
-    static func carriedTravel(for velocity: CGPoint) -> CGPoint {
-        let factor: CGFloat = 0.12
-        let cap: CGFloat = 220
-        return CGPoint(
-            x: max(-cap, min(cap, velocity.x * factor)),
-            y: max(-cap, min(cap, velocity.y * factor))
-        )
-    }
 
     // Blurred small and scaled back up: a blur is all low frequencies, so the
     // downsample is invisible in the result and turns a full-size Gaussian on
