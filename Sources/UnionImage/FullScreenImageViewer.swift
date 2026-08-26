@@ -21,17 +21,24 @@ public final class ImageViewerController {
     /// expanding presentation an invented one reads as the image being blown
     /// up out of whatever button was tapped. This arrives at full size out of
     /// a blur instead, and dissolves back into one on the way out.
+    /// Handed the image and the view controller to present from when the
+    /// toolbar's Share button is tapped. Without one the viewer falls back to
+    /// the system share sheet carrying the image.
+    public typealias ShareHandler = @MainActor (UIImage, UIViewController) -> Void
+
     public func show(
         image: UIImage,
         expandedCornerRadius: CGFloat = 0,
-        showsControls: Bool = true
+        showsControls: Bool = true,
+        onShare: ShareHandler? = nil
     ) {
         show(
             image: image,
             sourceFrame: nil,
             sourceCornerRadius: 0,
             expandedCornerRadius: expandedCornerRadius,
-            showsControls: showsControls
+            showsControls: showsControls,
+            onShare: onShare
         )
     }
 
@@ -40,15 +47,22 @@ public final class ImageViewerController {
         sourceFrame: CGRect,
         sourceCornerRadius: CGFloat = 0,
         expandedCornerRadius: CGFloat = 0,
-        showsControls: Bool = true
+        showsControls: Bool = true,
+        onShare: ShareHandler? = nil
     ) {
         show(
             image: image,
             sourceFrame: .some(sourceFrame),
             sourceCornerRadius: sourceCornerRadius,
             expandedCornerRadius: expandedCornerRadius,
-            showsControls: showsControls
+            showsControls: showsControls,
+            onShare: onShare
         )
+    }
+
+    /// Closes the viewer the way its own Close button does, animation and all.
+    public func close() {
+        viewerViewController?.close()
     }
 
     private func show(
@@ -56,7 +70,8 @@ public final class ImageViewerController {
         sourceFrame: CGRect?,
         sourceCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
-        showsControls: Bool
+        showsControls: Bool,
+        onShare: ShareHandler?
     ) {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
@@ -70,6 +85,7 @@ public final class ImageViewerController {
             sourceCornerRadius: sourceCornerRadius,
             expandedCornerRadius: expandedCornerRadius,
             showsControls: showsControls,
+            onShare: onShare,
             onDismiss: { [weak self] in
                 self?.dismiss()
             }
@@ -124,19 +140,21 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     private let sourceCornerRadius: CGFloat
     private let expandedCornerRadius: CGFloat
     private let showsControls: Bool
+    private let onShare: ImageViewerController.ShareHandler?
     private let onDismiss: @MainActor () -> Void
 
     private let backgroundView = UIView()
     private let imageView = UIImageView()
-    // The dissolve needs three layers, not two. A blurred copy of the picture
-    // is laid over the sharp one and faded, which is the only way to animate a
-    // blur on an image view -- there is no animatable blur radius, and a
-    // visual-effect view samples the backdrop rather than resolving the
-    // picture. But the two copies have to sit inside something that owns the
-    // opacity and the scale, or the container's own fade multiplies the blur
-    // down as well and all you get is a plain fade. That is what `contentView`
-    // is for: it carries alpha and transform, and blurView's alpha alone
-    // decides how much of the picture is resolved.
+    // The way out needs three layers, not two. A blurred copy of the picture
+    // is laid over the sharp one and crossfaded in, which is the only way to
+    // animate a blur on an image view -- there is no animatable blur radius,
+    // and a visual-effect view samples the backdrop rather than resolving the
+    // picture. The two copies sit inside `contentView`, which carries the scale
+    // and the final fade; the crossfade between them runs ahead of that fade so
+    // the picture is visibly blurred while it is still mostly opaque, rather
+    // than the blur only ever showing through a picture that is already gone.
+    // The blurred copy is not clamped or clipped, so its edges bleed out soft
+    // and the card's crisp outline goes with the rest of the detail.
     private let contentView = UIView()
     private let blurView = UIImageView()
     private var scrollView: UIScrollView?
@@ -178,6 +196,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         sourceCornerRadius: CGFloat,
         expandedCornerRadius: CGFloat,
         showsControls: Bool,
+        onShare: ImageViewerController.ShareHandler?,
         onDismiss: @escaping @MainActor () -> Void
     ) {
         self.image = image
@@ -185,6 +204,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         self.sourceCornerRadius = sourceCornerRadius
         self.expandedCornerRadius = expandedCornerRadius
         self.showsControls = showsControls
+        self.onShare = onShare
         self.onDismiss = onDismiss
         super.init(nibName: nil, bundle: nil)
     }
@@ -214,22 +234,13 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             view.addSubview(imageView)
         } else {
             contentView.frame = expandedFrame
-            contentView.clipsToBounds = true
-            contentView.layer.cornerRadius = expandedCornerRadius
             contentView.alpha = 0
             contentView.transform = Self.arrivalScale
             view.addSubview(contentView)
 
             imageView.frame = contentView.bounds
-            imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            imageView.layer.cornerRadius = expandedCornerRadius
             contentView.addSubview(imageView)
-
-            blurView.image = Self.blurred(image)
-            blurView.contentMode = .scaleAspectFill
-            blurView.clipsToBounds = true
-            blurView.frame = contentView.bounds
-            blurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            contentView.addSubview(blurView)
         }
 
         setupNavigationBar()
@@ -246,9 +257,8 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
     func expandImage() {
         guard !dissolves else {
-            // Scale and opacity spring in together; the blur is given its own,
-            // slightly longer pass so the picture is still resolving after it
-            // has finished arriving rather than landing already sharp.
+            // Arrives sharp: scale and opacity spring in together. The blur is
+            // for the way out only.
             UIView.animate(
                 withDuration: 0.42,
                 delay: 0,
@@ -259,16 +269,12 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
                     self.contentView.transform = .identity
                     self.contentView.alpha = 1
                     self.backgroundView.alpha = 1
+                },
+                completion: { _ in
+                    self.installScrollView()
+                    self.contentView.removeFromSuperview()
                 }
             )
-
-            UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseOut]) {
-                self.blurView.alpha = 0
-            } completion: { _ in
-                self.blurView.removeFromSuperview()
-                self.installScrollView()
-                self.contentView.removeFromSuperview()
-            }
             return
         }
 
@@ -381,22 +387,31 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
             imageView.transform = .identity
             imageView.frame = contentView.bounds
+            imageView.alpha = 1
             contentView.addSubview(imageView)
 
+            let blur = Self.blurred(image, bleed: Self.exitBlurBleed)
+            blurView.image = blur.image
+            blurView.contentMode = .scaleToFill
             blurView.alpha = 0
-            blurView.frame = contentView.bounds
+            blurView.frame = contentView.bounds.insetBy(
+                dx: -blur.bleed * contentView.bounds.width,
+                dy: -blur.bleed * contentView.bounds.height
+            )
             contentView.addSubview(blurView)
 
+            UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut]) {
+                self.imageView.alpha = 0
+                self.blurView.alpha = 1
+            }
+
             UIView.animate(
-                withDuration: 0.28,
+                withDuration: 0.34,
                 delay: 0,
-                usingSpringWithDamping: 0.9,
-                initialSpringVelocity: 0,
-                options: [.beginFromCurrentState],
+                options: [.curveEaseIn, .beginFromCurrentState],
                 animations: {
                     self.contentView.transform = Self.arrivalScale
                     self.contentView.alpha = 0
-                    self.blurView.alpha = 1
                     self.backgroundView.alpha = 0
                 },
                 completion: { _ in
@@ -441,10 +456,13 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         )
     }
 
+    func close() {
+        collapseImage(completion: onDismiss)
+    }
+
     private func setupNavigationBar() {
         let closeButton = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in
-            guard let self else { return }
-            collapseImage(completion: onDismiss)
+            self?.close()
         })
         navigationItem.rightBarButtonItem = closeButton
         navigationController?.setNavigationBarHidden(!controlsVisible, animated: false)
@@ -458,6 +476,10 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         self.saveButton = saveButton
         let shareButton = UIBarButtonItem(systemItem: .action, primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
+            if let onShare {
+                onShare(image, self)
+                return
+            }
             let itemSource = ImageActivityItemSource(image: image)
             let activityVC = UIActivityViewController(activityItems: [itemSource], applicationActivities: nil)
             activityVC.popoverPresentationController?.barButtonItem = self.toolbarItems?.last
@@ -558,13 +580,21 @@ private extension ImageViewerViewController {
     // it looks like it is being thrown from somewhere.
     static var arrivalScale: CGAffineTransform { CGAffineTransform(scaleX: 0.86, y: 0.86) }
 
+    // How far past its own edge the blurred copy is allowed to spill, as a
+    // fraction of the picture's size. The bleed is what turns the card's hard
+    // outline soft on the way out; without it the edge stays razor sharp while
+    // the inside goes to mush and the thing never reads as blurring.
+    static var exitBlurBleed: CGFloat { 0.08 }
+
     // Blurred small and scaled back up: a blur is all low frequencies, so the
     // downsample is invisible in the result and turns a full-size Gaussian on
-    // a story-sized card into something that does not stall the first frame.
-    // Clamping first stops the edges bleeding to transparent.
-    static func blurred(_ image: UIImage) -> UIImage? {
+    // a story-sized card into something that does not stall the frame. The
+    // picture is not clamped, so the blur runs out into transparency past the
+    // edges; the returned bleed is how much bigger than the picture the
+    // result is, per side, as a fraction of each dimension.
+    static func blurred(_ image: UIImage, bleed: CGFloat) -> (image: UIImage?, bleed: CGFloat) {
         let longest = max(image.size.width, image.size.height)
-        guard longest > 0 else { return nil }
+        guard longest > 0 else { return (nil, 0) }
 
         let scale = min(1, 400 / longest)
         let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
@@ -572,13 +602,14 @@ private extension ImageViewerViewController {
             image.draw(in: CGRect(origin: .zero, size: size))
         }
 
-        guard let input = CIImage(image: small), let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
-        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
-        filter.setValue(12.0, forKey: kCIInputRadiusKey)
+        guard let input = CIImage(image: small), let filter = CIFilter(name: "CIGaussianBlur") else { return (nil, 0) }
+        filter.setValue(input, forKey: kCIInputImageKey)
+        filter.setValue(size.width * 0.05, forKey: kCIInputRadiusKey)
 
+        let padded = input.extent.insetBy(dx: -size.width * bleed, dy: -size.height * bleed)
         guard let output = filter.outputImage,
-              let cgImage = CIContext().createCGImage(output, from: input.extent) else { return nil }
-        return UIImage(cgImage: cgImage)
+              let cgImage = CIContext().createCGImage(output, from: padded) else { return (nil, 0) }
+        return (UIImage(cgImage: cgImage), bleed)
     }
 }
 
