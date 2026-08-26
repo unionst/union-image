@@ -366,7 +366,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     // translation is zero, which repaints the background to full black over a
     // viewer that is already halfway gone. Standing the whole window down hands
     // that touch to the content underneath, which is where it was aimed.
-    private func collapseImage(completion: @escaping @MainActor () -> Void) {
+    private func collapseImage(velocity: CGPoint = .zero, completion: @escaping @MainActor () -> Void) {
         guard !isDismissing else { return }
         uninstallScrollView()
         isDismissing = true
@@ -374,12 +374,20 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         setNeedsStatusBarAppearanceUpdate()
 
         if dissolves {
-            // A drag leaves the picture off-centre and part-scaled. It goes out
-            // the way it came in regardless -- back to the middle, down to the
-            // arrival scale, blurring as it fades -- so the wrapper picks the
-            // drag's transform up first and the snap home starts from exactly
-            // where the finger left it.
+            // A drag leaves the picture off-centre and part-scaled. A release
+            // keeps going the way the finger was moving -- carrying its
+            // velocity a little further while it shrinks, blurs and fades --
+            // rather than stopping dead and reversing back to the middle,
+            // which read as the picture being yanked out of the hand. Only a
+            // button close, with no drag behind it, goes home to the arrival
+            // scale.
             let dragged = imageView.transform
+            let draggedScale = sqrt(dragged.a * dragged.a + dragged.c * dragged.c)
+            let carry = Self.carriedTravel(for: velocity)
+            let exit = dragged == .identity
+                ? Self.arrivalScale
+                : CGAffineTransform(translationX: dragged.tx + carry.x, y: dragged.ty + carry.y)
+                    .scaledBy(x: draggedScale * 0.86, y: draggedScale * 0.86)
             contentView.frame = expandedFrame
             contentView.transform = dragged
             contentView.alpha = 1
@@ -406,11 +414,11 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             }
 
             UIView.animate(
-                withDuration: 0.34,
+                withDuration: 0.3,
                 delay: 0,
-                options: [.curveEaseIn, .beginFromCurrentState],
+                options: [.curveEaseOut, .beginFromCurrentState],
                 animations: {
-                    self.contentView.transform = Self.arrivalScale
+                    self.contentView.transform = exit
                     self.contentView.alpha = 0
                     self.backgroundView.alpha = 0
                 },
@@ -537,11 +545,11 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             backgroundView.alpha = 1 - progress
 
         case .ended, .cancelled:
-            let velocity = gesture.velocity(in: view).y
-            let shouldDismiss = translation.y > 100 || velocity > 300
+            let velocity = gesture.velocity(in: view)
+            let shouldDismiss = translation.y > 100 || velocity.y > 300
 
             if shouldDismiss {
-                collapseImage(completion: onDismiss)
+                collapseImage(velocity: velocity, completion: onDismiss)
             } else {
                 UIView.animate(
                     withDuration: 0.4,
@@ -585,6 +593,18 @@ private extension ImageViewerViewController {
     // outline soft on the way out; without it the edge stays razor sharp while
     // the inside goes to mush and the thing never reads as blurring.
     static var exitBlurBleed: CGFloat { 0.08 }
+
+    // How much further a released picture travels on its own: the finger's
+    // velocity over the first stretch of the exit, capped so a hard fling
+    // still fades out on screen instead of leaving it.
+    static func carriedTravel(for velocity: CGPoint) -> CGPoint {
+        let factor: CGFloat = 0.12
+        let cap: CGFloat = 220
+        return CGPoint(
+            x: max(-cap, min(cap, velocity.x * factor)),
+            y: max(-cap, min(cap, velocity.y * factor))
+        )
+    }
 
     // Blurred small and scaled back up: a blur is all low frequencies, so the
     // downsample is invisible in the result and turns a full-size Gaussian on
