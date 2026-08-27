@@ -101,7 +101,12 @@ public final class ImageViewerController {
         navController.navigationBar.compactAppearance = appearance
 
         let window = UIWindow(windowScene: windowScene)
-        window.windowLevel = .alert + 100
+        // Above the keyboard, not just above alerts: the keyboard's own window
+        // sits far higher than .alert, and a picture opened from a thread with
+        // the composer up was drawn underneath it -- invisible, but still the
+        // frontmost window, so every tap after that went to it and nothing
+        // appeared to happen.
+        window.windowLevel = UIWindow.Level(rawValue: 10_000_100)
         window.backgroundColor = .clear
         window.overrideUserInterfaceStyle = .dark
         window.rootViewController = navController
