@@ -11,6 +11,7 @@ public final class ImageViewerController {
 
     private var overlayWindow: UIWindow?
     private var viewerViewController: ImageViewerViewController?
+    private weak var displacedResponder: UIView?
 
     public private(set) var activeImage: UIImage?
 
@@ -77,6 +78,7 @@ public final class ImageViewerController {
             .compactMap({ $0 as? UIWindowScene })
             .first else { return }
 
+        displacedResponder = windowScene.windows.lazy.compactMap { $0.firstResponderView }.first
         windowScene.windows.forEach { $0.endEditing(true) }
 
         activeImage = image
@@ -88,6 +90,9 @@ public final class ImageViewerController {
             expandedCornerRadius: expandedCornerRadius,
             showsControls: showsControls,
             onShare: onShare,
+            onWillDismiss: { [weak self] in
+                self?.restoreDisplacedResponder()
+            },
             onDismiss: { [weak self] in
                 self?.dismiss()
             }
@@ -124,6 +129,13 @@ public final class ImageViewerController {
         }
     }
 
+    private func restoreDisplacedResponder() {
+        guard let responder = displacedResponder else { return }
+        displacedResponder = nil
+        responder.window?.makeKey()
+        responder.becomeFirstResponder()
+    }
+
     private func dismiss() {
         withAnimation(.easeOut(duration: 0.1)) {
             activeImage = nil
@@ -148,6 +160,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     private let expandedCornerRadius: CGFloat
     private let showsControls: Bool
     private let onShare: ImageViewerController.ShareHandler?
+    private let onWillDismiss: @MainActor () -> Void
     private let onDismiss: @MainActor () -> Void
 
     private let backgroundView = UIView()
@@ -204,6 +217,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         expandedCornerRadius: CGFloat,
         showsControls: Bool,
         onShare: ImageViewerController.ShareHandler?,
+        onWillDismiss: @escaping @MainActor () -> Void,
         onDismiss: @escaping @MainActor () -> Void
     ) {
         self.image = image
@@ -212,6 +226,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         self.expandedCornerRadius = expandedCornerRadius
         self.showsControls = showsControls
         self.onShare = onShare
+        self.onWillDismiss = onWillDismiss
         self.onDismiss = onDismiss
         super.init(nibName: nil, bundle: nil)
     }
@@ -378,6 +393,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
         uninstallScrollView()
         isDismissing = true
         view.window?.isUserInteractionEnabled = false
+        onWillDismiss()
         setNeedsStatusBarAppearanceUpdate()
 
         if dissolves {
@@ -693,5 +709,15 @@ public struct ZoomableImage: View {
                     )
                 }
         }
+    }
+}
+
+private extension UIView {
+    var firstResponderView: UIView? {
+        if isFirstResponder { return self }
+        for subview in subviews {
+            if let responder = subview.firstResponderView { return responder }
+        }
+        return nil
     }
 }
