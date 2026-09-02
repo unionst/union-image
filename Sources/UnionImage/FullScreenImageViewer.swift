@@ -77,6 +77,8 @@ public final class ImageViewerController {
             .compactMap({ $0 as? UIWindowScene })
             .first else { return }
 
+        windowScene.windows.forEach { $0.endEditing(true) }
+
         activeImage = image
 
         let viewerVC = ImageViewerViewController(
