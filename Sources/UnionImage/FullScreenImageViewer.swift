@@ -1,4 +1,3 @@
-import CoreImage
 import SwiftUI
 import UIKit
 import LinkPresentation
@@ -165,18 +164,9 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
     private let backgroundView = UIView()
     private let imageView = UIImageView()
-    // The way out needs three layers, not two. A blurred copy of the picture
-    // is laid over the sharp one and crossfaded in, which is the only way to
-    // animate a blur on an image view -- there is no animatable blur radius,
-    // and a visual-effect view samples the backdrop rather than resolving the
-    // picture. The two copies sit inside `contentView`, which carries the scale
-    // and the final fade; the crossfade between them runs ahead of that fade so
-    // the picture is visibly blurred while it is still mostly opaque, rather
-    // than the blur only ever showing through a picture that is already gone.
-    // The blurred copy is not clamped or clipped, so its edges bleed out soft
-    // and the card's crisp outline goes with the rest of the detail.
     private let contentView = UIView()
-    private let blurView = UIImageView()
+    private let dissolve = ImageDissolve()
+    private var dissolveHost: UIHostingController<DissolvingImage>?
     private var scrollView: UIScrollView?
     private var panGesture: UIPanGestureRecognizer!
     private var singleTapGesture: UITapGestureRecognizer!
@@ -294,8 +284,10 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
                     self.backgroundView.alpha = 1
                 },
                 completion: { _ in
+                    guard !self.isDismissing else { return }
                     self.installScrollView()
-                    self.contentView.removeFromSuperview()
+                    self.contentView.isHidden = true
+                    self.installDissolveHost()
                 }
             )
             return
@@ -315,9 +307,31 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
                 self.backgroundView.alpha = 1
             },
             completion: { _ in
+                guard !self.isDismissing else { return }
                 self.installScrollView()
             }
         )
+    }
+
+    private func installDissolveHost() {
+        guard dissolveHost == nil else { return }
+        let size = expandedFrame.size
+        let host = UIHostingController(
+            rootView: DissolvingImage(
+                image: image,
+                size: size,
+                cornerRadius: expandedCornerRadius,
+                dissolve: dissolve
+            )
+        )
+        host.safeAreaRegions = []
+        host.view.backgroundColor = .clear
+        host.view.isUserInteractionEnabled = false
+        host.view.frame = CGRect(origin: .zero, size: size)
+            .insetBy(dx: -Self.dissolveBleed, dy: -Self.dissolveBleed)
+        contentView.addSubview(host.view)
+        host.view.layoutIfNeeded()
+        dissolveHost = host
     }
 
     private func installScrollView() {
@@ -412,22 +426,10 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             contentView.center = origin
             contentView.transform = CGAffineTransform(scaleX: draggedScale, y: draggedScale)
             contentView.alpha = 1
+            contentView.isHidden = false
             view.addSubview(contentView)
-
-            imageView.transform = .identity
-            imageView.frame = contentView.bounds
-            imageView.alpha = 1
-            contentView.addSubview(imageView)
-
-            let blur = Self.blurred(image, bleed: Self.exitBlurBleed)
-            blurView.image = blur.image
-            blurView.contentMode = .scaleToFill
-            blurView.alpha = 0
-            blurView.frame = contentView.bounds.insetBy(
-                dx: -blur.bleed * contentView.bounds.width,
-                dy: -blur.bleed * contentView.bounds.height
-            )
-            contentView.addSubview(blurView)
+            installDissolveHost()
+            imageView.removeFromSuperview()
 
             let duration = 0.4
             let travel = Self.travelAnimator(duration: duration, velocity: velocity, from: origin, to: home)
@@ -443,16 +445,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             }
             travel.startAnimation()
             settle.startAnimation()
-
-            UIView.animateKeyframes(withDuration: duration, delay: 0, options: [.beginFromCurrentState]) {
-                UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.45) {
-                    self.imageView.alpha = 0
-                    self.blurView.alpha = 1
-                }
-                UIView.addKeyframe(withRelativeStartTime: 0.15, relativeDuration: 0.85) {
-                    self.contentView.alpha = 0
-                }
-            }
+            dissolve.begin(duration: duration, radius: expanded.width * Self.dissolveBlur)
             return
         }
 
@@ -656,11 +649,9 @@ private extension ImageViewerViewController {
     // size, so the trip home reads as a trip.
     static var departureScale: CGAffineTransform { CGAffineTransform(scaleX: 0.7, y: 0.7) }
 
-    // How far past its own edge the blurred copy is allowed to spill, as a
-    // fraction of the picture's size. The bleed is what turns the card's hard
-    // outline soft on the way out; without it the edge stays razor sharp while
-    // the inside goes to mush and the thing never reads as blurring.
-    static var exitBlurBleed: CGFloat { 0.08 }
+    static var dissolveBleed: CGFloat { 80 }
+
+    static var dissolveBlur: CGFloat { 0.06 }
 
     static var springDamping: CGFloat { 0.85 }
 
@@ -691,32 +682,6 @@ private extension ImageViewerViewController {
 
     static func relativeVelocity(_ velocity: CGFloat, over distance: CGFloat) -> CGFloat {
         abs(distance) > 0.5 ? velocity / distance : 0
-    }
-
-    // Blurred small and scaled back up: a blur is all low frequencies, so the
-    // downsample is invisible in the result and turns a full-size Gaussian on
-    // a story-sized card into something that does not stall the frame. The
-    // picture is not clamped, so the blur runs out into transparency past the
-    // edges; the returned bleed is how much bigger than the picture the
-    // result is, per side, as a fraction of each dimension.
-    static func blurred(_ image: UIImage, bleed: CGFloat) -> (image: UIImage?, bleed: CGFloat) {
-        let longest = max(image.size.width, image.size.height)
-        guard longest > 0 else { return (nil, 0) }
-
-        let scale = min(1, 400 / longest)
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let small = UIGraphicsImageRenderer(size: size).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-
-        guard let input = CIImage(image: small), let filter = CIFilter(name: "CIGaussianBlur") else { return (nil, 0) }
-        filter.setValue(input, forKey: kCIInputImageKey)
-        filter.setValue(size.width * 0.05, forKey: kCIInputRadiusKey)
-
-        let padded = input.extent.insetBy(dx: -size.width * bleed, dy: -size.height * bleed)
-        guard let output = filter.outputImage,
-              let cgImage = CIContext().createCGImage(output, from: padded) else { return (nil, 0) }
-        return (UIImage(cgImage: cgImage), bleed)
     }
 }
 
