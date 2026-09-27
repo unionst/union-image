@@ -183,6 +183,7 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     private var saveButton: UIBarButtonItem?
     private var controlsVisible = false
     private var isDismissing = false
+    private var returnAnimators: [UIViewPropertyAnimator] = []
 
     private var expandedFrame: CGRect {
         let screenSize = UIScreen.main.bounds.size
@@ -388,8 +389,9 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
     // translation is zero, which repaints the background to full black over a
     // viewer that is already halfway gone. Standing the whole window down hands
     // that touch to the content underneath, which is where it was aimed.
-    private func collapseImage(completion: @escaping @MainActor () -> Void) {
+    private func collapseImage(velocity: CGPoint = .zero, completion: @escaping @MainActor () -> Void) {
         guard !isDismissing else { return }
+        finishReturn()
         uninstallScrollView()
         isDismissing = true
         view.window?.isUserInteractionEnabled = false
@@ -401,8 +403,14 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             // middle and down to well short of full size, blurring and fading
             // as it travels, all on one spring.
             let dragged = imageView.transform
-            contentView.frame = expandedFrame
-            contentView.transform = dragged
+            let draggedScale = sqrt(dragged.a * dragged.a + dragged.c * dragged.c)
+            let expanded = expandedFrame
+            let home = CGPoint(x: expanded.midX, y: expanded.midY)
+            let origin = CGPoint(x: home.x + dragged.tx, y: home.y + dragged.ty)
+            contentView.transform = .identity
+            contentView.bounds = CGRect(origin: .zero, size: expanded.size)
+            contentView.center = origin
+            contentView.transform = CGAffineTransform(scaleX: draggedScale, y: draggedScale)
             contentView.alpha = 1
             view.addSubview(contentView)
 
@@ -422,20 +430,19 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             contentView.addSubview(blurView)
 
             let duration = 0.4
-            UIView.animate(
-                withDuration: duration,
-                delay: 0,
-                usingSpringWithDamping: 0.85,
-                initialSpringVelocity: 0,
-                options: [.beginFromCurrentState],
-                animations: {
-                    self.contentView.transform = Self.departureScale
-                    self.backgroundView.alpha = 0
-                },
-                completion: { _ in
-                    completion()
-                }
-            )
+            let travel = Self.travelAnimator(duration: duration, velocity: velocity, from: origin, to: home)
+            travel.addAnimations {
+                self.contentView.center = home
+            }
+            let settle = UIViewPropertyAnimator(duration: duration, dampingRatio: Self.springDamping) {
+                self.contentView.transform = Self.departureScale
+                self.backgroundView.alpha = 0
+            }
+            settle.addCompletion { _ in
+                completion()
+            }
+            travel.startAnimation()
+            settle.startAnimation()
 
             UIView.animateKeyframes(withDuration: duration, delay: 0, options: [.beginFromCurrentState]) {
                 UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.45) {
@@ -465,22 +472,71 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
             }
         }
 
-        UIView.animate(
-            withDuration: 0.35,
-            delay: 0,
-            usingSpringWithDamping: 0.85,
-            initialSpringVelocity: 0,
-            options: [.beginFromCurrentState],
-            animations: {
-                guard let source = self.sourceFrame else { return }
-                self.imageView.bounds.size = source.size
-                self.imageView.center = CGPoint(x: source.midX, y: source.midY)
-                self.imageView.layer.cornerRadius = self.sourceCornerRadius
-                self.backgroundView.alpha = 0
-            },
-            completion: { _ in
-                completion()
-            }
+        guard let source = sourceFrame else {
+            completion()
+            return
+        }
+
+        let duration = 0.35
+        let destination = CGPoint(x: source.midX, y: source.midY)
+        let travel = Self.travelAnimator(duration: duration, velocity: velocity, from: imageView.center, to: destination)
+        travel.addAnimations {
+            self.imageView.center = destination
+        }
+        let settle = UIViewPropertyAnimator(duration: duration, dampingRatio: Self.springDamping) {
+            self.imageView.bounds.size = source.size
+            self.imageView.layer.cornerRadius = self.sourceCornerRadius
+            self.backgroundView.alpha = 0
+        }
+        settle.addCompletion { _ in
+            completion()
+        }
+        travel.startAnimation()
+        settle.startAnimation()
+    }
+
+    private func returnHome(velocity: CGPoint) {
+        let home = imageView.center
+        let dragged = imageView.transform
+        let draggedScale = sqrt(dragged.a * dragged.a + dragged.c * dragged.c)
+        let origin = CGPoint(x: home.x + dragged.tx, y: home.y + dragged.ty)
+        imageView.center = origin
+        imageView.transform = CGAffineTransform(scaleX: draggedScale, y: draggedScale)
+
+        let duration = 0.4
+        let travel = Self.travelAnimator(duration: duration, velocity: velocity, from: origin, to: home)
+        travel.addAnimations {
+            self.imageView.center = home
+        }
+        let settle = UIViewPropertyAnimator(duration: duration, dampingRatio: Self.springDamping) {
+            self.imageView.transform = .identity
+            self.backgroundView.alpha = 1
+        }
+        settle.addCompletion { position in
+            guard position == .end else { return }
+            self.returnAnimators = []
+            self.installScrollView()
+        }
+        returnAnimators = [travel, settle]
+        travel.startAnimation()
+        settle.startAnimation()
+    }
+
+    private func finishReturn() {
+        let animators = returnAnimators
+        returnAnimators = []
+        for animator in animators where animator.state == .active {
+            animator.stopAnimation(false)
+            animator.finishAnimation(at: .end)
+        }
+    }
+
+    private func releaseVelocity(of gesture: UIPanGestureRecognizer) -> CGPoint {
+        let translation = gesture.translation(in: view)
+        let velocity = gesture.velocity(in: view)
+        return CGPoint(
+            x: velocity.x * Self.resistanceSlope(at: translation.x),
+            y: translation.y > 0 ? velocity.y : velocity.y * Self.resistanceSlope(at: translation.y)
         )
     }
 
@@ -552,39 +608,27 @@ private class ImageViewerViewController: UIViewController, UIScrollViewDelegate,
 
         switch gesture.state {
         case .began:
+            finishReturn()
             uninstallScrollView()
 
         case .changed:
             let progress = min(max(translation.y, 0) / 300, 1)
-            let dampedX = translation.x / (1 + abs(translation.x) / 100)
-            let offsetY = translation.y > 0 ? translation.y : 0
+            let offsetX = Self.resisted(translation.x)
+            let offsetY = translation.y > 0 ? translation.y : Self.resisted(translation.y)
             let scale = 1 - progress * 0.1
 
-            imageView.transform = CGAffineTransform(translationX: dampedX, y: offsetY)
+            imageView.transform = CGAffineTransform(translationX: offsetX, y: offsetY)
                 .scaledBy(x: scale, y: scale)
             backgroundView.alpha = 1 - progress
 
         case .ended, .cancelled:
-            let velocity = gesture.velocity(in: view).y
-            let shouldDismiss = translation.y > 100 || velocity > 300
+            let velocity = releaseVelocity(of: gesture)
+            let shouldDismiss = translation.y > 100 || gesture.velocity(in: view).y > 300
 
             if shouldDismiss {
-                collapseImage(completion: onDismiss)
+                collapseImage(velocity: velocity, completion: onDismiss)
             } else {
-                UIView.animate(
-                    withDuration: 0.4,
-                    delay: 0,
-                    usingSpringWithDamping: 0.85,
-                    initialSpringVelocity: 0,
-                    options: [],
-                    animations: {
-                        self.imageView.transform = .identity
-                        self.backgroundView.alpha = 1
-                    },
-                    completion: { _ in
-                        self.installScrollView()
-                    }
-                )
+                returnHome(velocity: velocity)
             }
 
         default:
@@ -617,6 +661,37 @@ private extension ImageViewerViewController {
     // outline soft on the way out; without it the edge stays razor sharp while
     // the inside goes to mush and the thing never reads as blurring.
     static var exitBlurBleed: CGFloat { 0.08 }
+
+    static var springDamping: CGFloat { 0.85 }
+
+    static func resisted(_ offset: CGFloat) -> CGFloat {
+        offset / (1 + abs(offset) / 100)
+    }
+
+    static func resistanceSlope(at offset: CGFloat) -> CGFloat {
+        let resistance = 1 + abs(offset) / 100
+        return 1 / (resistance * resistance)
+    }
+
+    static func travelAnimator(
+        duration: TimeInterval,
+        velocity: CGPoint,
+        from origin: CGPoint,
+        to destination: CGPoint
+    ) -> UIViewPropertyAnimator {
+        let timing = UISpringTimingParameters(
+            dampingRatio: springDamping,
+            initialVelocity: CGVector(
+                dx: relativeVelocity(velocity.x, over: destination.x - origin.x),
+                dy: relativeVelocity(velocity.y, over: destination.y - origin.y)
+            )
+        )
+        return UIViewPropertyAnimator(duration: duration, timingParameters: timing)
+    }
+
+    static func relativeVelocity(_ velocity: CGFloat, over distance: CGFloat) -> CGFloat {
+        abs(distance) > 0.5 ? velocity / distance : 0
+    }
 
     // Blurred small and scaled back up: a blur is all low frequencies, so the
     // downsample is invisible in the result and turns a full-size Gaussian on
